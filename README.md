@@ -1,476 +1,708 @@
+# 智路视界 — 交通标志分类识别系统
 
-﻿# 交通标志分类识别系统
+**智路视界（Traffic Vision）** 是一套面向 GTSRB 43 类交通标志的传统计算机视觉识别系统。项目以 **OpenCV + HOG/HSV + scikit-learn** 为核心，同时提供 **PyQt5 桌面端**与 **React + FastAPI Web 端**，覆盖数据处理、特征提取、模型训练、图片识别、候选区域检测、视频跟踪、复杂场景增强、评估和性能验证。
 
-基于 **OpenCV + HOG/HSV + SVM / KNN / RandomForest** 的交通标志分类识别的项目。
-覆盖数据加载 → 预处理 → 特征抽取 → 多分类器训练 → 评估 → 推理加速 → 桌面 GUI 全流程。
-
----
-
-## 项目目标
-
-1. 使用 OpenCV 对交通标志图像进行预处理（灰度化、CLAHE、尺寸归一化）。
-2. 通过 HOG（方向梯度直方图）+ HSV 颜色直方图 提取图像特征。
-3. 使用 **SVM / KNN / RandomForest / 软投票集成** 多分类器对比与组合。
-4. 引入 **类别权重平衡、数据增强、贝叶斯超参搜索** 系统性提升精度。
-5. 提供 **特征缓存、批量预测、帧间跳过** 等推理加速策略，单图 < 50 ms、视频 ≥ 15 FPS。
-6. 提供可视化界面（PyQt）方便实时检测与结果展示。
+> 本项目不依赖深度学习框架，适用于课程设计、传统视觉算法验证和轻量化识别演示，不应直接用于自动驾驶等安全关键场景。
 
 ---
 
-## 快速开始
+## 项目特性
 
-| 任务 | 命令 |
-| --- | --- |
-| 安装依赖 | `pip install -r requirements.txt` |
-| 训练 SVM (HOG+HSV, balanced) | `python -m traffic_sign_system.scripts.train --model svm --mode hog+hsv --class-weight balanced` |
-| 训练 SVM+KNN+RF 集成 | `python -m traffic_sign_system.scripts.train --mode hog+hsv --ensemble` |
-| 评估 bundle | `python -m traffic_sign_system.scripts.evaluate --bundle models/artifacts/svm_hog+hsv.joblib` |
-| 单图预测 | `python -m traffic_sign_system.scripts.predict_one --bundle <bundle> --image <png>` |
-| 启动桌面 GUI | `python -m traffic_sign_system` |
-| 推理性能基准 | `python -m traffic_sign_system.scripts.benchmark --bundle <bundle>` |
-| 贝叶斯超参搜索 | `python -m traffic_sign_system.scripts.hyperopt_search --n-calls 30` |
+- 内置 GTSRB `0~42` 共 **43 类交通标志中文标签**。
+- 支持 `hog`、`hsv`、`hog+hsv` 三种特征模式。
+- 支持 SVM、KNN、RandomForest 和软投票集成模型。
+- 支持类别权重、SVM 网格搜索和贝叶斯超参搜索。
+- 模型、StandardScaler、标签、特征配置和训练摘要统一保存为 `.joblib` Bundle。
+- 支持单图预测、Top-K、文件夹批量预测和有界结果缓存。
+- 使用 HSV 红/蓝掩膜、轮廓、形状、面积和 NMS 完成候选区域检测。
+- 视频和摄像头模式集成 IoU 跟踪、Track ID、类别多数投票及置信度平滑。
+- 支持低光照、低对比/雾、运动模糊和噪声的场景分析与自适应增强。
+- 提供 PyQt5 桌面界面和 React Web 工作台两套操作界面。
 
 ---
 
-## 目录结构
+## 当前模型状态
 
+默认模型路径：
+
+```text
+traffic_sign_system/models/artifacts/svm_hog+hsv.joblib
 ```
-traffic_sign_system/
-├── main.py                 # 桌面 GUI 入口
-├── __main__.py             # python -m traffic_sign_system 启动器
-├── requirements.txt        # Python 依赖
-├── README.md               # 本文件
+
+当前工作区训练日志记录：
+
+| 项目 | 当前记录 |
+| --- | ---: |
+| 模型 | SVM（RBF） |
+| 特征 | HOG + HSV |
+| 特征维度 | 1828 |
+| 训练样本 | 26,661 |
+| 验证样本 | 4,706 |
+| 测试样本 | 7,842 |
+| 验证准确率 | 99.62% |
+| 测试准确率 | 99.58% |
+| 模型大小 | 约 233 MB |
+
+> 以上验证集和测试集来自本地 GTSRB `Train` 数据的分层切分，不是独立官方测试集结果。数据集和模型文件体积较大，默认被 `.gitignore` 忽略。
+
+---
+
+## 技术栈
+
+| 模块 | 技术 |
+| --- | --- |
+| 开发语言 | Python 3.10 / 3.11 / 3.12、TypeScript |
+| 图像处理 | OpenCV 4.10、Pillow |
+| 科学计算 | NumPy、Pandas、SciPy |
+| 机器学习 | scikit-learn、scikit-optimize、joblib |
+| 特征算法 | HOG、HSV Color Histogram、HOG/HSV Feature Fusion |
+| 分类模型 | SVM、KNN、RandomForest、Soft Voting Ensemble |
+| 桌面界面 | PyQt5 |
+| Web 后端 | FastAPI、Uvicorn、Multipart、WebSocket |
+| Web 前端 | React 18、TypeScript、Vite、React Router |
+| 前端状态与请求 | Zustand、TanStack Query |
+| 图表与图标 | Recharts、Lucide React |
+| 可视化 | Matplotlib |
+| 测试 | Python unittest、TypeScript/Vite Build |
+
+---
+
+## 系统流程
+
+```mermaid
+flowchart LR
+    A[图片 / 视频 / 摄像头] --> B[SceneAnalyzer 场景分析]
+    B --> C[Preprocessor 自适应预处理]
+    C --> D[HOG / HSV / HOG+HSV]
+    D --> E[StandardScaler]
+    E --> F[SVM / KNN / RF / Ensemble]
+    F --> G[类别、中文名称、置信度]
+
+    A --> H[HSV 候选区域检测]
+    H --> I[形状、大小与 NMS 后处理]
+    I --> C
+    G --> J[SimpleTracker 帧间融合]
+
+    G --> K[PyQt5 桌面端]
+    J --> K
+    G --> L[FastAPI HTTP / WebSocket]
+    L --> M[React Web 工作台]
+```
+
+### 核心识别链路
+
+1. OpenCV 读取并校验 BGR 图像。
+2. `SceneAnalyzer` 计算亮度、对比度、模糊度和噪声分数。
+3. `Preprocessor` 完成 Resize、灰度化、CLAHE、归一化和可选锐化。
+4. `FeatureBuilder` 提取 HOG、HSV 或 HOG/HSV 融合特征。
+5. 使用 Bundle 中保存的 `StandardScaler` 缩放特征。
+6. 分类器输出类别编号、中文名称和置信度。
+7. 场景检测模式先定位候选框，再对候选区域分类。
+8. 视频/摄像头模式通过 `SimpleTracker` 稳定连续帧结果。
+
+---
+
+## 项目结构
+
+```text
+.
+├── README.md
+├── requirements.txt
+├── frontend/                         # React + TypeScript Web 前端
+│   ├── package.json
+│   ├── vite.config.ts                # /api 与 /ws 开发代理
+│   └── src/
+│       ├── app/                      # Router 与 Provider
+│       ├── components/               # 页面框架、上传、检测框和结果组件
+│       ├── pages/                    # 单图、实时、批量、分析、模型页面
+│       ├── lib/                      # API、类型与格式化函数
+│       └── store/                    # Zustand 状态管理
 │
-├── config/
-│   ├── settings.py         # 路径、HOG 参数、SVM 超参、数据划分比例
-│   └── labels.py           # 类别 ID → 名称映射（支持从 labels.csv 加载）
-│
-├── data_processing/
-│   ├── data_loader.py      # 训练/测试数据加载
-│   ├── preprocessing.py    # BGR → 灰度 → 去噪 → CLAHE → 归一化
-│   ├── augmentation.py     # 数据增强池（affine / perspective / motion_blur / cutout / strong）
-│   └── dataset_statistics.py
-│
-├── features/
-│   ├── hog_extractor.py    # OpenCV HOGDescriptor 封装
-│   ├── color_extractor.py  # HSV 颜色直方图
-│   └── feature_fusion.py   # FeatureBuilder：hog / hsv / hog+hsv 三种模式
-│
-├── models/
-│   ├── train_svm.py        # SVM 训练（支持 class_weight=balanced）
-│   ├── train_knn.py        # KNN 训练
-│   ├── train_random_forest.py
-│   ├── train_ensemble.py   # 软投票集成（SVM+KNN+RF）
-│   ├── model_manager.py    # bundle 序列化 / 校验
-│   └── artifacts/          # .joblib 模型包 + 历史 + 基准输出
-│
-├── evaluation/
-│   ├── evaluator.py        # metrics.json / confusion_matrix / errors.csv
-│   ├── confusion_matrix.py
-│   ├── error_analysis.py
-│   └── comparison.py       # SVM/KNN/RF 对比
-│
-├── recognition/            # 推理模块
-│   ├── predictor.py        # 单图/批量预测 + LRU 缓存
-│   ├── sign_detector.py    # HSV 颜色掩膜 + 轮廓候选区检测
-│   ├── video_recognizer.py # 视频流帧间跳过 + ROI
-│   └── camera_recognizer.py# 摄像头中心 ROI + 置信度平滑
-│
-├── scripts/                # 命令行入口
-│   ├── train.py            # 训练（含 --class-weight / --ensemble / --grid-search）
-│   ├── evaluate.py
-│   ├── compare.py          # SVM/KNN/RF 对比
-│   ├── error_stats.py      # 错误分析（top_confusions / per-class recall）
-│   ├── build_features.py
-│   ├── predict_one.py
-│   ├── check_dataset.py
-│   └── benchmark.py        # 推理性能基准（单图/批量/视频 FPS）
-│   └── hyperopt_search.py  # 贝叶斯超参搜索（skopt）
-│
-└── ui/                     # PyQt 桌面界面
-    ├── main_window.py
-    ├── dashboard.py
-    ├── widgets.py
-    ├── workers.py
-    ├── image_utils.py
-    └── styles.py
+└── traffic_sign_system/
+    ├── __main__.py                   # python -m traffic_sign_system
+    ├── main.py                       # PyQt5 桌面入口
+    ├── api/
+    │   ├── __main__.py               # python -m traffic_sign_system.api
+    │   └── app.py                    # FastAPI 服务
+    ├── config/
+    │   ├── settings.py               # 全局参数和目录配置
+    │   └── labels.py                 # GTSRB 43 类中文标签
+    ├── data_processing/
+    │   ├── data_loader.py            # 数据读取和分层切分
+    │   ├── preprocessing.py          # 常规与自适应预处理
+    │   ├── augmentation.py           # 仿射、透视、模糊和遮挡增强
+    │   └── dataset_statistics.py     # 数据统计
+    ├── features/
+    │   ├── hog_extractor.py
+    │   ├── color_extractor.py
+    │   └── feature_fusion.py
+    ├── models/
+    │   ├── model_manager.py          # Bundle 保存、加载与校验
+    │   ├── train_svm.py
+    │   ├── train_knn.py
+    │   ├── train_random_forest.py
+    │   ├── train_ensemble.py
+    │   └── artifacts/                # 本地模型和生成结果
+    ├── recognition/
+    │   ├── predictor.py              # 单图、批量与缓存推理
+    │   ├── sign_detector.py          # 候选检测和后处理
+    │   ├── tracker.py                # IoU 跟踪和帧间融合
+    │   ├── scene_aware.py            # 场景质量分析
+    │   ├── video_recognizer.py       # 视频检测与跟踪
+    │   └── camera_recognizer.py      # 摄像头 ROI 识别
+    ├── evaluation/                   # 指标、混淆矩阵和错误分析
+    ├── scripts/                      # 训练、评估、预测和验证命令
+    ├── tests/                        # 自动化测试及测试资源
+    └── ui/                           # PyQt5 窗口、Worker 和主题
 ```
 
 ---
 
 ## 环境安装
 
-```bash
-# 推荐使用 conda 或 venv 创建虚拟环境（Python 3.10 / 3.11 / 3.12）
-conda create -n traffic_sign python=3.11 -y
-conda activate traffic_sign
+### Python 环境
 
-# 安装依赖
+推荐 Python `3.10~3.12`。
+
+PowerShell：
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-`requirements.txt` 关键依赖：
-
-```
-opencv-python==4.10.0.84
-PyQt5==5.15.10
-Pillow>=10.0,<12
-numpy<2
-pandas>=2.2,<3
-scikit-learn>=1.5
-joblib>=1.4
-scikit-optimize>=0.10        # 贝叶斯超参搜索
-matplotlib>=3.10
-```
-
----
-
-## 训练
-
-### 单模型
+Linux / macOS：
 
 ```bash
-# SVM + HOG+HSV, balanced 类别权重（推荐主流程）
-python -m traffic_sign_system.scripts.train \
-    --model svm --mode hog+hsv --class-weight balanced \
-    --C 10.0 --gamma scale --kernel rbf
-
-# KNN
-python -m traffic_sign_system.scripts.train --model knn --mode hog+hsv --n-neighbors 5
-
-# Random Forest
-python -m traffic_sign_system.scripts.train --model rf  --mode hog+hsv --n-estimators 200
-
-# SVM + Grid Search（C / gamma 自动寻优）
-python -m traffic_sign_system.scripts.train \
-    --model svm --mode hog+hsv --grid-search \
-    --C-grid 0.1 1.0 10.0 --gamma-grid scale 0.001 0.01 --cv-folds 3
-```
-
-### 软投票集成（SVM + KNN + RF，按 val accuracy 加权）
-
-```bash
-python -m traffic_sign_system.scripts.train \
-    --mode hog+hsv --ensemble --class-weight balanced
-```
-
-训练完成后，bundle 自动保存到 `models/artifacts/{model|ensemble}_<mode>.joblib`，包含
-classifier / scaler / label_map / feature_config / summary 五项元信息。
-
-### 类别权重与样本平衡
-
-| flag | 含义 |
-| --- | --- |
-| `--class-weight balanced` | SVM 按 `n_samples / (n_classes * np.bincount(y))` 自动平衡 43 类 |
-| `--class-weight none` | 不做权重补偿 |
-| `--max-samples N` | 等量下采样到 N 张以加速实验 |
-
-GTSRB 类别 0/19/37 仅 ~210 张而 2/13 有 2000+ 张，`--class-weight balanced` 通常在少数类上
-提升 recall 0.5~2%。
-
----
-
-## 模型精度提升策略（第 ㉑ 步）
-
-| 策略 | 文件 | 关键点 |
-| --- | --- | --- |
-| ① 类别权重平衡 | [models/train_svm.py](traffic_sign_system/models/train_svm.py) | `class_weight="balanced"` |
-| ② 软投票集成 | [models/train_ensemble.py](traffic_sign_system/models/train_ensemble.py) | SVM+KNN+RF，`set_weights_from_scores` 按 val acc 加权 |
-| ③ 数据增强调优 | [data_processing/augmentation.py](traffic_sign_system/data_processing/augmentation.py) | 新增 `random_perspective` / `motion_blur` / `cutout` / `apply_strong`；`AUGMENT_POOL` 7 项按权重采样 |
-| ④ 贝叶斯超参搜索 | [scripts/hyperopt_search.py](traffic_sign_system/scripts/hyperopt_search.py) | `gp_minimize` 6 维空间，3-fold CV，写 `models/artifacts/hyperopt_history.json` |
-
-```bash
-# 策略 ④：默认 30 次迭代，10 个初始随机点
-python -m traffic_sign_system.scripts.hyperopt_search \
-    --mode hog+hsv --n-calls 30 --n-initial-points 10 \
-    --output traffic_sign_system/models/artifacts/hyperopt_history.json
-```
-
----
-
-## 评估
-
-### 单 bundle 评估
-
-```bash
-python -m traffic_sign_system.scripts.evaluate \
-    --bundle "models/artifacts/svm_hog+hsv.joblib" \
-    --data "dataset/test/" \
-    --out "models/artifacts/eval/"
-```
-
-产出：
-
-- `metrics.json` — 总体 accuracy / macro-F1 / weighted-F1 / 各类 PRF
-- `confusion_matrix.png` — 归一化混淆矩阵
-- `errors.csv` — 误判样本（含 `confidence` 列，分类器无 `predict_proba` 时为 `NaN`）
-
-### 错误分析
-
-```bash
-python -m traffic_sign_system.scripts.error_stats \
-    --bundle "models/artifacts/svm_hog+hsv.joblib" \
-    --data "dataset/test/"
-```
-
-产出：
-
-- `top_confusions.csv` / `.png` — 有向混淆对（A→B 不同于 B→A）
-- `errors_per_class.csv` / `.png` — 各类 recall / error_count / support
-- 同时复用 evaluator 写出 `metrics.json` / `confusion_matrix.png` / `errors.csv`
-
-### SVM / KNN / RandomForest 对比
-
-```bash
-python -m traffic_sign_system.scripts.build_features --mode "hog+hsv"
-python -m traffic_sign_system.scripts.compare \
-    --features "models/artifacts/features_hog+hsv.npz"
-```
-
-产出 `comparison.csv`、`comparison.png`、`confusion_matrices.png`。
-
----
-
-## 单图 / 批量预测
-
-### Python API
-
-```python
-import cv2
-from traffic_sign_system.recognition.predictor import Predictor
-
-predictor = Predictor(
-    "traffic_sign_system/models/artifacts/svm_hog+hsv.joblib",
-    use_cache=True,    # LRU 缓存（视频相邻帧去重）
-    cache_maxsize=512,
-)
-
-# 单图
-img = cv2.imread("sample_64x64.png")
-result = predictor.predict(img)
-print(result)
-# {'class_id': 12, 'class_name': 'Stop', 'confidence': 0.973214}
-
-# 批量（一次 extract + scaler + predict，比循环快 3-5x）
-imgs = [img] * 100
-results = predictor.predict_batch(imgs)
-print(predictor.cache_stats())
-# {'hits': 99, 'misses': 1, 'hit_rate': 0.99, 'size': 1, 'maxsize': 512}
-```
-
-### 命令行
-
-```bash
-python -m traffic_sign_system.scripts.predict_one \
-    --bundle "svm_hog+hsv.joblib" \
-    --image "dataset/test/sample_64x64.png"
-```
-
-输出：
-
-```text
-class_id: 12
-class_name: Stop
-confidence: 0.973214
-```
-
----
-
-## 推理加速（第 ㉒ 步）
-
-| 优化 | 实现位置 | 预期收益 |
-| --- | --- | --- |
-| LRU 图像缓存 | `Predictor(use_cache=True, cache_maxsize=512)` | 单图重复访问 ~25x 加速，视频 hit_rate > 80% |
-| 批量预测 | `Predictor.predict_batch(imgs)` | 100 张批量 vs 100 次循环：3~5x 加速 |
-| 帧间跳过 | `VideoRecognizer(skip_frames=2)` | FPS 提升 2~3x |
-| 中心 ROI | `CameraRecognizer(roi_size=64)` | 减少特征抽取区域 |
-| 置信度平滑 | `CameraRecognizer(smooth_window=3)` | 偶发噪声更稳健 |
-
-```bash
-# 性能基准：单图 / 批量 / 视频 FPS
-python -m traffic_sign_system.scripts.benchmark \
-    --bundle "models/artifacts/svm_hog+hsv.joblib" \
-    --repeats-single 100 \
-    --batch-sizes 1 10 50 100 \
-    --skip-options 0 1 2 \
-    --output "models/artifacts/benchmark.json"
-```
-
-控制台输出示例：
-
-```text
-========== BENCHMARK SUMMARY ==========
-[1] Single predict
-  cold (no cache)   : 40.21 ms/call
-  warm (with cache) :  0.52 ms/call
-  speedup           : 77.3x
-  cache hit_rate    : 0.99
-[2] Batch predict
-  batch= 100  loop=4000 ms  batch=900 ms  speedup=4.4x
-[3] Video FPS
-    skip_0  fps_mean=22.1  reuse_rate=0.00  cache_hit=0.83
-    skip_2  fps_mean=50.3  reuse_rate=0.65  cache_hit=0.79
-```
-
----
-
-## 桌面 GUI
-
-```bash
-# 自动加载 models/artifacts/svm_hog+hsv.joblib（如存在）
-python -m traffic_sign_system
-# 等价于 python -m traffic_sign_system.main
-```
-
-界面提供：
-
-- 加载 / 切换模型 bundle
-- 单图预测 + 候选区域检测（HSV + 轮廓）
-- 视频 / 摄像头实时识别（带帧间跳过 + 置信度平滑）
-- 评估 / 错误分析面板
-
----
-
-## Web 前端（React + TypeScript）
-
-项目已新增浅蓝色现代化 Web 工作台，桌面 PyQt 界面仍保留作为回退方案。Web 版提供：
-
-- 单图分类、Top-5 候选与 HSV 候选区域检测
-- 浏览器摄像头 / 本地视频 WebSocket 实时识别
-- 最多 50 张图片的批量推理与 CSV 导出
-- 当前会话置信度、类别分布、来源和耗时图表
-- 模型 Bundle、推理缓存与 43 类标签管理
-- 响应式布局、浅蓝 / 深色主题及页面级代码分割
-
-启动后端 API：
-
-```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
 pip install -r requirements.txt
-python -m traffic_sign_system.api
-# API: http://127.0.0.1:8000
-# OpenAPI: http://127.0.0.1:8000/docs
 ```
 
-启动前端开发服务器（新终端）：
+### Web 前端环境
 
-```bash
+建议使用 Node.js `18+`：
+
+```powershell
 cd frontend
 npm install
-npm run dev
-# Web UI: http://127.0.0.1:5173
+cd ..
 ```
 
-生产构建：
+如果 PowerShell 因执行策略无法运行 `npm.ps1`，可以使用：
 
-```bash
+```powershell
+cd frontend
+npm.cmd install
+```
+
+---
+
+## 快速启动
+
+### 启动 PyQt5 桌面端
+
+在项目根目录执行：
+
+```powershell
+python -m traffic_sign_system
+```
+
+桌面端会自动尝试加载：
+
+```text
+traffic_sign_system/models/artifacts/svm_hog+hsv.joblib
+```
+
+桌面界面当前支持：
+
+- 选择和异步加载模型 Bundle；
+- 单图识别与 Top-3 结果；
+- 原图和预处理图对比；
+- HSV 候选区域场景检测；
+- 文件夹批量识别；
+- 视频与摄像头识别；
+- 暂停、停止和保存识别视频；
+- IoU 跟踪框和 Track ID；
+- 自适应增强开关；
+- 亮度、模糊度、FPS 和耗时状态；
+- 历史记录和浅色/深色主题。
+
+### 启动 FastAPI 后端
+
+```powershell
+python -m traffic_sign_system.api
+```
+
+默认地址：
+
+```text
+API:     http://127.0.0.1:8000
+OpenAPI: http://127.0.0.1:8000/docs
+```
+
+### 启动 React Web 前端
+
+打开另一个终端：
+
+```powershell
+cd frontend
+npm run dev
+```
+
+访问：
+
+```text
+http://127.0.0.1:5173
+```
+
+PowerShell 如拦截 npm 脚本，可执行：
+
+```powershell
+npm.cmd run dev
+```
+
+Web 工作台包含：
+
+| 页面 | 功能 |
+| --- | --- |
+| 单图识别 | 图片上传、Top-5 分类和候选框检测 |
+| 实时识别 | 浏览器摄像头或本地视频 WebSocket 识别 |
+| 批量处理 | 最多 50 张图片批量识别和 CSV 导出 |
+| 数据分析 | 当前会话类别、置信度、来源和耗时图表 |
+| 模型管理 | Bundle 加载、缓存清理和 43 类标签浏览 |
+
+### Web 生产构建
+
+```powershell
 cd frontend
 npm run build
 npm run preview
 ```
 
+Vite 开发服务器会将 `/api` 和 `/ws` 代理到 `127.0.0.1:8000`。
+
 ---
 
-## 候选区域检测（HSV + 轮廓）
+## 数据集准备
 
-`SignDetector` 用 HSV 颜色掩膜 + 几何过滤（面积、宽高比、圆度）在道路场景图中
-定位候选交通标志，再送入 `Predictor` 分类。该模块为传统视觉示例，在复杂光照、
-遮挡、运动模糊下质量会下降，不用于安全关键场景。
+项目使用 GTSRB 数据集，推荐目录结构：
+
+```text
+traffic_sign_system/dataset/
+├── train/
+│   ├── Train/
+│   │   ├── 0/*.png
+│   │   ├── 1/*.png
+│   │   └── ...
+│   ├── Test/                         # 可选：官方测试图片
+│   ├── Train.csv
+│   ├── Test.csv
+│   └── Meta.csv
+└── test/
+    └── Test/                         # 同样支持该测试目录
+```
+
+当前本地 CSV 记录：
+
+| 文件 | 记录数 |
+| --- | ---: |
+| `Train.csv` | 39,209 |
+| `Test.csv` | 12,630 |
+| `Meta.csv` | 43 |
+
+数据集默认不会提交到 Git。只有 `Test.csv` 而没有实际 `Test/*.png` 时，无法执行独立测试集评估。
+
+---
+
+## 模型训练
+
+### 推荐训练命令
+
+```powershell
+python -m traffic_sign_system.scripts.train `
+  --model svm `
+  --mode hog+hsv `
+  --class-weight balanced `
+  --output traffic_sign_system/models/artifacts/svm_hog+hsv.joblib
+```
+
+### 小样本烟雾训练
+
+```powershell
+python -m traffic_sign_system.scripts.train `
+  --model svm `
+  --mode hog+hsv `
+  --max-samples 2000 `
+  --output traffic_sign_system/models/artifacts/svm_smoke.joblib
+```
+
+### KNN
+
+```powershell
+python -m traffic_sign_system.scripts.train `
+  --model knn `
+  --mode hog+hsv `
+  --n-neighbors 5
+```
+
+### RandomForest
+
+```powershell
+python -m traffic_sign_system.scripts.train `
+  --model rf `
+  --mode hog+hsv `
+  --n-estimators 300 `
+  --n-jobs -1
+```
+
+### 软投票集成
+
+```powershell
+python -m traffic_sign_system.scripts.train `
+  --mode hog+hsv `
+  --ensemble `
+  --n-jobs -1
+```
+
+集成模型由 SVM、KNN 和 RandomForest 组成，并按验证集准确率设置权重。
+
+### SVM 网格搜索
+
+```powershell
+python -m traffic_sign_system.scripts.train `
+  --model svm `
+  --mode hog+hsv `
+  --grid-search `
+  --cv-folds 3 `
+  --C-grid 1 10 30 `
+  --gamma-grid scale 0.001 0.01
+```
+
+### 贝叶斯超参搜索
+
+```powershell
+python -m traffic_sign_system.scripts.hyperopt_search `
+  --mode hog+hsv `
+  --n-calls 30 `
+  --n-initial-points 10 `
+  --cv-folds 3
+```
+
+---
+
+## 单图和批量预测
+
+### 命令行预测
+
+```powershell
+python -m traffic_sign_system.scripts.predict_one `
+  --bundle traffic_sign_system/models/artifacts/svm_hog+hsv.joblib `
+  --image path/to/sign.png
+```
+
+### Python 调用
 
 ```python
+import cv2
+
+from traffic_sign_system.recognition.predictor import Predictor
 from traffic_sign_system.recognition.sign_detector import SignDetector, draw_detections
 
+predictor = Predictor(
+    "traffic_sign_system/models/artifacts/svm_hog+hsv.joblib",
+    use_cache=True,
+    cache_maxsize=512,
+)
+
+image = cv2.imread("path/to/sign.png")
+result = predictor.predict(image)
+print(result)
+# {"class_id": 14, "class_name": "停车让行", "confidence": 0.97}
+
+batch_results = predictor.predict_batch([image, image])
+print(predictor.cache_stats())
+
 detector = SignDetector(predictor)
-detections = detector.detect(frame_bgr)
-annotated = draw_detections(frame_bgr, detections)
+detections = detector.detect(image)
+annotated = draw_detections(image, detections)
+cv2.imwrite("detection_result.png", annotated)
 ```
 
 ---
 
-## 配置说明
+## 候选区域检测与后处理
 
-所有全局配置集中在 `config/settings.py`：
+`SignDetector` 的处理流程：
 
-| 字段 | 含义 | 默认值 |
-| --- | --- | --- |
-| `IMG_SIZE` | 统一 resize 的方形边长 | `64` |
-| `HOG_*` | HOG 窗口 / 块 / cell / 方向数 | `(64,64) (16,16) (8,8) (8,8) 9` |
-| `SVM_C / KERNEL / GAMMA` | SVM 超参 | `10.0 / rbf / scale` |
-| `TEST_SIZE / VAL_SIZE` | 数据划分比例 | `0.2 / 0.15` |
-| `RANDOM_STATE` | 全局随机种子 | `42` |
-| `MODEL_ARTIFACTS_DIR` | `.joblib` 输出目录 | `models/artifacts/` |
-
-修改 `settings.py` 即可调整整个系统行为。
+1. 根据 HSV 红色和蓝色范围生成颜色掩膜；
+2. 通过形态学处理清理掩膜；
+3. 提取轮廓并检查面积、宽高比和圆度；
+4. 将候选区域交给 `Predictor` 分类；
+5. 根据类别验证圆形、三角形和八边形等轮廓形状；
+6. 检查检测框相对面积是否符合类别范围；
+7. 使用 NMS 去除重叠候选；
+8. 过滤低置信度且形状不匹配的候选。
 
 ---
 
-## 测试与烟雾验证
+## 帧间跟踪与融合
 
-无 GTSRB 数据集时，可用以下合成数据烟雾测试验证整条 pipeline：
+`SimpleTracker` 使用 IoU 完成轻量多目标跟踪，不依赖深度学习。
 
-```bash
-python -c "
-# 仅作语法 / 接口校验，不保证精度
-from traffic_sign_system.recognition.predictor import Predictor
-from traffic_sign_system.recognition.video_recognizer import VideoRecognizer
-from traffic_sign_system.recognition.camera_recognizer import CameraRecognizer
-from traffic_sign_system.models.train_ensemble import EnsembleClassifier
-from traffic_sign_system.scripts.benchmark import run
-print('all imports OK')
-"
-```
+| 参数 | 默认值 | 作用 |
+| --- | ---: | --- |
+| `iou_threshold` | 0.3 | 检测与轨迹匹配阈值 |
+| `max_lost` | 5 | 轨迹最多保留的丢失帧数 |
+| `history_size` | 7 | 类别多数投票窗口 |
+| `bbox_smoothing` | 0.65 | 边界框指数平滑系数 |
+| `confidence_smoothing` | 0.65 | 置信度指数平滑系数 |
 
----
+跟踪器会：
 
-## 常见问题
+- 按 IoU 从高到低进行一对一匹配；
+- 为新目标创建稳定的 `track_id`；
+- 对历史类别进行多数投票；
+- 平滑边界框和置信度；
+- 暂时保留丢失轨迹；
+- 使用虚线框显示 `lost_count > 0` 的轨迹；
+- 超过 `max_lost` 后删除轨迹。
 
-- **找不到 GTSRB 数据目录**：脚本会依次探测 `dataset/Train`、`dataset/train/Train`；
-  使用 `--train-dir` / `--data` 显式指定即可。
-- **OpenCV HOGDescriptor 返回 None**：图像尺寸与 `HOG_WIN_SIZE` 不一致，确认
-  `feature_config['img_size']` 与 `settings.IMG_SIZE` 一致。
-- **KNN `n_neighbors` 过大**：`--n-neighbors` 不能超过训练集大小。
-- **SVM 训练耗时过长**：先用 `--max-samples 2000` 做小样本验证；或开启
-  `--grid-search` 配合 `--cv-folds 3` 走 CV。
-- **缓存命中率低**：视频中相邻帧若差异较大（场景切换），可降低 `skip_frames`
-  并提高 `cache_maxsize`。
-
----
-
-## License
-
-Course design project — for educational use only.
-
-
-## 帧间跟踪与复杂场景验证（步骤 24–25）
-
-### 连续视频跟踪验证
+### 视频稳定性验证
 
 ```powershell
 python -m traffic_sign_system.scripts.verify_tracking `
   traffic_sign_system/tests/assets/tracking_validation.mp4 `
   traffic_sign_system/models/artifacts/svm_hog+hsv.joblib `
-  --max-frames 60 --adaptive
+  --max-frames 60 `
+  --adaptive
 ```
 
-验证视频每 5 帧注入一次局部遮挡，用于模拟分类瞬时跳变。当前样例实测：原始类别跳变率
-40.68%，跟踪后 0%，降低 100%；同一标志始终保持 track_id=0，平均跟踪开销约
-0.06 ms/帧。
+脚本会输出：
 
-### 低光照自适应验证
+- 原始类别跳变率；
+- 跟踪后的类别跳变率；
+- 跳变率降低比例；
+- Track ID 数量；
+- 平均跟踪耗时。
 
-低光照测试图：`traffic_sign_system/tests/assets/low_light_confidence_test.png`。
+当前内置验证样例曾记录原始跳变率 `40.68%`、跟踪后 `0%`，平均跟踪耗时约 `0.06 ms/帧`。实际结果取决于模型、视频和运行环境。
+
+---
+
+## 场景感知与自适应增强
+
+`SceneAnalyzer` 输出：
+
+```python
+{
+    "brightness": 53.0,
+    "contrast": 31.2,
+    "blur_score": 42.5,
+    "noise_score": 0.08,
+    "degradations": ["low_light", "fog", "blur"],
+    "analysis_seconds": 0.0018,
+}
+```
+
+默认策略：
+
+| 退化场景 | 判断条件 | 自适应处理 |
+| --- | --- | --- |
+| 低光照 | 平均亮度 `< 80` | CLAHE clip 提升到 `4.0` |
+| 低对比/雾 | 灰度标准差 `< 40` | CLAHE + Min-Max 归一化 |
+| 模糊 | Laplacian 方差 `< 50` | 关闭高斯模糊并执行锐化 |
+| 噪声 | 高频能量比超过阈值 | 启用适当平滑并显示噪声状态 |
+
+### 低光照验证
 
 ```powershell
 python -m traffic_sign_system.scripts.verify_robustness `
   traffic_sign_system/models/artifacts/svm_hog+hsv.joblib
 ```
 
-该样例亮度约 53，自动触发 `low_light + fog`，CLAHE clip 从 2.0 调整到 4.0。
-当前模型实测从错误类别 11（置信度 14.47%）修正为真实类别 23（置信度 34.46%），
-置信度绝对提升约 19.99%。另有完整低光场景及标注结果：
-`tests/assets/low_light_test.png`、`tests/assets/low_light_detection_result.png`。
+测试图片：
 
-### 自动化测试
+![低光照测试图](traffic_sign_system/tests/assets/low_light_confidence_test.png)
+
+历史验证中，该样例由错误类别 11、置信度 `14.47%`，调整为真实类别 23、置信度 `34.46%`。该数据用于验证流程，不代表所有图片都能得到相同提升。
+
+---
+
+## 模型评估
+
+准备好 GTSRB 官方测试图片后执行：
+
+```powershell
+python -m traffic_sign_system.scripts.evaluate `
+  --bundle traffic_sign_system/models/artifacts/svm_hog+hsv.joblib `
+  --data traffic_sign_system/dataset/train/Test `
+  --labels-csv traffic_sign_system/dataset/train/Test.csv `
+  --out traffic_sign_system/models/artifacts/eval
+```
+
+评估结果包括：
+
+- `metrics.json`
+- `confusion_matrix.png`
+- `errors.csv`
+- Accuracy、Macro-F1、Weighted-F1 和分类报告
+
+---
+
+## 性能基准
+
+```powershell
+python -m traffic_sign_system.scripts.benchmark `
+  --bundle traffic_sign_system/models/artifacts/svm_hog+hsv.joblib
+```
+
+基准脚本覆盖：
+
+- 单图重复推理；
+- 缓存命中统计；
+- 不同 Batch Size；
+- 视频帧跳过参数；
+- FPS 和平均延迟。
+
+结果默认写入：
+
+```text
+traffic_sign_system/models/artifacts/benchmark.json
+```
+
+---
+
+## FastAPI 接口
+
+| 方法 | 路径 | 功能 |
+| --- | --- | --- |
+| `GET` | `/api/health` | 服务与模型状态 |
+| `GET` | `/api/labels` | 获取 43 类标签 |
+| `GET` | `/api/models` | 枚举模型 Bundle |
+| `POST` | `/api/models/load` | 加载并预热模型 |
+| `DELETE` | `/api/models/cache` | 清空推理缓存 |
+| `POST` | `/api/predict` | 单图分类与 Top-K |
+| `POST` | `/api/detect` | 候选区域检测 |
+| `POST` | `/api/batch` | 最多 50 张图片批量分类 |
+| `WS` | `/ws/stream` | 浏览器视频帧实时分类 |
+
+接口限制：
+
+- 单张图片最大 `20 MB`；
+- 支持 JPEG、PNG、WebP 和 BMP；
+- 仅允许加载 `traffic_sign_system/models/artifacts/` 中的 `.joblib` 文件。
+
+> WebSocket 当前进行整帧分类并支持 `skip_frames`；PyQt5 视频/摄像头模式使用 `SignDetector + SimpleTracker` 完成候选框检测与跟踪，两条实时链路的行为不同。
+
+---
+
+## 默认配置
+
+配置文件：`traffic_sign_system/config/settings.py`
+
+| 配置 | 默认值 |
+| --- | --- |
+| `IMG_SIZE` | 64 |
+| `HOG_WIN_SIZE` | `(64, 64)` |
+| `HOG_BLOCK_SIZE` | `(16, 16)` |
+| `HOG_BLOCK_STRIDE` | `(8, 8)` |
+| `HOG_CELL_SIZE` | `(8, 8)` |
+| `HOG_NBINS` | 9 |
+| `SVM_C` | 10.0 |
+| `SVM_KERNEL` | `rbf` |
+| `SVM_GAMMA` | `scale` |
+| `TEST_SIZE` | 0.20 |
+| `VAL_SIZE` | 0.15 |
+| `RANDOM_STATE` | 42 |
+
+训练后的 Bundle 会保存独立的 `feature_config`，推理时优先使用 Bundle 内的训练配置。
+
+---
+
+## 自动化测试
+
+### Python 测试
 
 ```powershell
 python -m unittest traffic_sign_system.tests.test_tracking_and_scene -v
 ```
+
+当前覆盖 8 项：
+
+- IoU 匹配和 Track ID；
+- 类别投票和丢失轨迹生命周期；
+- 跟踪平均耗时小于 2 ms/帧；
+- VideoRecognizer 跟踪集成；
+- 低光照 CLAHE 参数调整；
+- 模糊检测和锐化；
+- 候选框形状后处理；
+- 丢失轨迹虚线绘制。
+
+### 前端构建验证
+
+```powershell
+cd frontend
+npm run build
+```
+
+PowerShell 如拦截 `npm.ps1`：
+
+```powershell
+npm.cmd run build
+```
+
+当前工作区验证结果：Python 8 项测试全部通过，React/Vite 生产构建成功。
+
+---
+
+## 常见问题
+
+### 找不到默认模型
+
+将训练好的 Bundle 放入：
+
+```text
+traffic_sign_system/models/artifacts/
+```
+
+默认文件名为 `svm_hog+hsv.joblib` 时，桌面端和 API 会优先加载。
+
+### 找不到训练数据
+
+确认目录存在：
+
+```text
+traffic_sign_system/dataset/train/Train/<ClassId>/*.png
+```
+
+也可以通过训练参数 `--train-dir` 指定其他目录。
+
+### SVM 训练时间过长
+
+先使用 `--max-samples 2000` 验证训练链路。完整的 RBF SVM + HOG/HSV 模型训练时间较长，模型文件也较大。
+
+### 评估命令找不到图片
+
+`Test.csv` 只是标注文件，还需要准备实际的 `Test/*.png` 图片。
+
+### 浏览器摄像头无法打开
+
+确认浏览器已获得摄像头权限。远程访问时通常需要 HTTPS 安全上下文。
+
+### PowerShell 无法运行 npm
+
+使用 `npm.cmd run dev` 或 `npm.cmd run build`，绕过被执行策略拦截的 `npm.ps1`。
+
+### HSV-only 模型不能进行灰度自适应增强对比
+
+`hsv` 模式没有 HOG 灰度预处理器。复杂场景验证应使用 `hog` 或 `hog+hsv` 模型。
+
+---
+
+## 使用说明
+
+本仓库当前没有单独的开源许可证文件，默认仅用于学习、课程设计和技术演示。公开发布、商用或二次分发前，请补充明确的许可证，并确认 GTSRB 数据集及所有第三方依赖的授权条款。
