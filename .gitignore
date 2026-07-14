@@ -1,0 +1,64 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments and local environment files
+.venv/
+venv/
+env/
+.env
+.env.*
+
+# IDE and local assistant settings
+.vscode/
+.idea/
+.claude/
+
+# OS/editor temporary files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.~lock.*
+
+# Local datasets (GTSRB contains tens of thousands of images)
+traffic_sign_system/dataset/**
+!traffic_sign_system/dataset/README.md
+!traffic_sign_system/dataset/test/
+traffic_sign_system/dataset/test/**
+!traffic_sign_system/dataset/test/.gitkeep
+
+# Generated model and evaluation artifacts
+traffic_sign_system/models/artifacts/**
+!traffic_sign_system/models/artifacts/.gitkeep
+*.joblib
+*.pkl
+*.pickle
+*.npz
+
+# Common generated reports
+metrics.json
+errors.csv
+top_confusions.csv
+errors_per_class.csv
+comparison.csv
+confusion_matrix.png
+confusion_matrices.png
+top_confusions.png
+errors_per_class.png
+comparison.png
+
+# Runtime-generated UI placeholder image (ensure_placeholder())
+traffic_sign_system/ui/resources/placeholder.png
+
+# Web frontend build artifacts
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+*.tsbuildinfo

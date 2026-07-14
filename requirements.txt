@@ -1,0 +1,26 @@
+# 交通标志分类识别系统 — Python 依赖
+# 适配 Python 3.10 / 3.11 / 3.12（已在 Python 3.12.7 通过烟雾测试）
+
+# 图像处理与 GUI
+opencv-python==4.10.0.84   # 含 cv2.imshow/namedWindow 等 GUI 后端
+PyQt5==5.15.10             # 桌面图形界面
+PyQt5-sip==12.13.0
+Pillow>=10.0,<12           # overlay_prediction/ensure_placeholder 渲染中文文字
+
+# 科学计算与数据
+numpy<2                     # 与 scipy/sklearn/opencv-python 4.10 兼容的 1.26.x
+pandas>=2.2,<3
+scipy>=1.13
+
+# 机器学习
+scikit-learn>=1.5
+joblib>=1.4
+scikit-optimize>=0.10       # 贝叶斯超参搜索（scripts/hyperopt_search.py）
+
+# 可视化
+matplotlib>=3.10
+
+# Web 前端 API
+fastapi>=0.115,<1
+uvicorn[standard]>=0.34,<1
+python-multipart>=0.0.20,<1
