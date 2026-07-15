@@ -244,6 +244,69 @@ API:     http://127.0.0.1:8000
 OpenAPI: http://127.0.0.1:8000/docs
 ```
 
+## 性能与 ONNX 加速
+
+FastAPI 后端默认采用 **ProcessPoolExecutor** 跑推理（`traffic_sign_system/api/inference_pool.py`），
+所有 CPU 密集任务（SVM/RF/KNN 推理、HOG 提取、检测）都在独立工作进程中执行，不再与
+HTTP/WS 路由共享 starlette 默认线程池。默认 worker 数 = `min(4, cpu_count())`，可通过环境变量覆盖：
+
+```powershell
+# 8 核机器上拉满
+$env:INFERENCE_POOL_WORKERS = "8"
+python -m traffic_sign_system.api
+```
+
+Lifespan 启动时会自动 **预热** 默认 bundle（`svm_hog+hsv.joblib`），每个 worker
+进程各自加载一次后常驻内存，避免首请求加载模型带来的秒级延迟。
+
+### ONNX 加速
+
+如果 `models/artifacts/<bundle>.onnx` 与 `<bundle>.joblib` 共存，
+`InferencePool` 会自动选用 `OnnxPredictor`（onnxruntime 后端）；否则回退到 joblib。
+ONNX 路径相比 sklearn 通常提速 **2~10×**，且天然脱离 GIL。
+
+导出命令：
+
+```powershell
+# 一次性导出所有 bundle（需先 pip install onnxruntime skl2onnx）
+python -m traffic_sign_system.scripts.export_onnx --all --report
+
+# 仅导出 SVM
+python -m traffic_sign_system.scripts.export_onnx svm_hog+hsv.joblib
+```
+
+输出 `<bundle>.onnx` 放在同目录；对集成模型还会写出 `<bundle>__<name>.onnx` 子模型文件。
+重启 API 后新 bundle 自动生效。
+
+### 内存预算
+
+每个 worker 加载一份模型，常驻内存：
+
+| 模型 | 大小 | 4 workers RSS（估） |
+| --- | --- | --- |
+| `svm_hog+hsv.joblib` | 234 MB | ~1.2 GB |
+| `rf_hog+hsv.joblib`  | 457 MB | ~1.8 GB |
+| `knn_hog+hsv.joblib` | 187 MB | ~1.0 GB |
+
+如部署到内存受限环境，请降低 `INFERENCE_POOL_WORKERS`。
+
+### WS 实时多目标检测与跟踪
+
+`/ws/stream` 使用进程池执行 `SignDetector` 多目标检测与分类，每个 WebSocket 连接
+独立维护 `SimpleTracker`，返回稳定的 `track_id`、平滑检测框、类别投票结果和
+短暂丢失状态。前端使用 SVG 在摄像头或本地视频上绘制多个检测框，可点击检测框或
+目标列表查看类别、置信度和 Track ID。
+
+响应帧包含 `detections`、`detection_count`、`tracked_count`、`tracker_ms`、`image` 和
+`processed_frames` 等字段。跳帧时复用最近的跟踪结果，避免频繁推理。
+
+
+### 错例纠正与反馈闭环
+
+Web 端“反馈闭环”页面可从当前会话历史中选择识别结果，标记“识别正确”或“错例”，
+并为错例选择真实类别、填写备注。反馈数据使用 SQLite 保存到 `runtime/feedback.db`，
+支持“待复核 → 已复核 → 已导出”状态流转，可导出 UTF-8 CSV 作为后续重训和混淆分析的标注清单。
+
 ### 启动 React Web 前端
 
 打开另一个终端：
@@ -270,8 +333,9 @@ Web 工作台包含：
 | 页面 | 功能 |
 | --- | --- |
 | 单图识别 | 图片上传、Top-5 分类和候选框检测 |
-| 实时识别 | 浏览器摄像头或本地视频 WebSocket 识别 |
+| 实时识别 | 摄像头或本地视频多目标检测、Track ID 跟踪与检测框交互 |
 | 批量处理 | 最多 50 张图片批量识别和 CSV 导出 |
+| 反馈闭环 | 错例标记、真实类别纠正、复核状态和 CSV 导出 |
 | 数据分析 | 当前会话类别、置信度、来源和耗时图表 |
 | 模型管理 | Bundle 加载、缓存清理和 43 类标签浏览 |
 
@@ -588,7 +652,10 @@ traffic_sign_system/models/artifacts/benchmark.json
 | `POST` | `/api/predict` | 单图分类与 Top-K |
 | `POST` | `/api/detect` | 候选区域检测 |
 | `POST` | `/api/batch` | 最多 50 张图片批量分类 |
-| `WS` | `/ws/stream` | 浏览器视频帧实时分类 |
+| `GET/POST` | `/api/feedback` | 查询或提交人工纠正反馈 |
+| `PATCH/DELETE` | `/api/feedback/{id}` | 更新反馈状态或删除记录 |
+| `GET` | `/api/feedback/export` | 导出反馈 CSV |
+| `WS` | `/ws/stream` | 浏览器视频帧实时多目标检测与跟踪 |
 
 接口限制：
 
@@ -596,7 +663,7 @@ traffic_sign_system/models/artifacts/benchmark.json
 - 支持 JPEG、PNG、WebP 和 BMP；
 - 仅允许加载 `traffic_sign_system/models/artifacts/` 中的 `.joblib` 文件。
 
-> WebSocket 当前进行整帧分类并支持 `skip_frames`；PyQt5 视频/摄像头模式使用 `SignDetector + SimpleTracker` 完成候选框检测与跟踪，两条实时链路的行为不同。
+> WebSocket 使用 `SignDetector + SimpleTracker` 完成整帧多目标检测与跟踪，并支持 `skip_frames`；每个连接独立维护 Track ID，前端可同时显示多个检测框。
 
 ---
 

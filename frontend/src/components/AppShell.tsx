@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   BarChart3,
@@ -8,6 +8,7 @@ import {
   Files,
   ImageIcon,
   Menu,
+  MessageSquareWarning,
   Moon,
   Radio,
   Route,
@@ -24,6 +25,7 @@ const navigation = [
   { to: "/", label: "单图识别", icon: ImageIcon, description: "分类与检测" },
   { to: "/realtime", label: "实时识别", icon: Radio, description: "视频与摄像头" },
   { to: "/batch", label: "批量处理", icon: Files, description: "多图片推理" },
+  { to: "/feedback", label: "反馈闭环", icon: MessageSquareWarning, description: "错例纠正与复核" },
   { to: "/analytics", label: "数据分析", icon: BarChart3, description: "趋势与统计" },
   { to: "/models", label: "模型管理", icon: Boxes, description: "Bundle 与类别" },
 ];
@@ -32,6 +34,10 @@ const pageMeta: Record<string, { title: string; subtitle: string }> = {
   "/": { title: "单图智能识别", subtitle: "上传图片，快速完成交通标志分类与候选区域检测" },
   "/realtime": { title: "实时流识别", subtitle: "连接摄像头或本地视频，实时返回识别结果" },
   "/batch": { title: "批量图片处理", subtitle: "一次上传多张图片并生成结构化识别结果" },
+  "/feedback": {
+    title: "错例纠正与反馈闭环",
+    subtitle: "人工复核识别结果，沉淀可导出的纠正样本",
+  },
   "/analytics": { title: "识别数据分析", subtitle: "查看当前会话中的类别分布、置信度与效率趋势" },
   "/models": { title: "模型与类别管理", subtitle: "管理模型 Bundle、推理缓存和 43 类标志标签" },
 };

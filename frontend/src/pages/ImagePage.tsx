@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Crosshair, Eraser, History, ImageIcon, ScanSearch, Sparkles, Timer, Zap } from "lucide-react";
 import clsx from "clsx";
@@ -36,6 +36,7 @@ export function ImagePage() {
       addHistory({
         source: "image",
         filename: file?.name ?? "image",
+        model: selectedModel,
         class_id: result.class_id,
         class_name: result.class_name,
         confidence: result.confidence,
@@ -52,6 +53,7 @@ export function ImagePage() {
       result.detections.forEach((item) => addHistory({
         source: "image",
         filename: file?.name ?? "image",
+        model: selectedModel,
         class_id: item.class_id,
         class_name: item.class_name,
         confidence: item.confidence,

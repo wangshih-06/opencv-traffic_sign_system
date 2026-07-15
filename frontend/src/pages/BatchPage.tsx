@@ -1,4 +1,4 @@
-﻿import { useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { CheckCircle2, Download, Files, ListChecks, Play, Trash2, XCircle } from "lucide-react";
 import { Button } from "../components/Button";
@@ -22,6 +22,7 @@ export function BatchPage() {
       response.items.forEach((item) => addHistory({
         source: "batch",
         filename: item.filename,
+        model: selectedModel,
         class_id: item.class_id,
         class_name: item.class_name,
         confidence: item.confidence,

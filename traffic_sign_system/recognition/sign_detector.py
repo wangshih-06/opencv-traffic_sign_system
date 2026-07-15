@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import cv2
 import numpy as np
 
-from traffic_sign_system.recognition.predictor import Predictor
+if TYPE_CHECKING:  # avoid circular import; annotation is a string under __future__
+    from traffic_sign_system.recognition import PredictorLike
 
 _DEFAULT_RED_LOW1 = (0, 70, 55)
 _DEFAULT_RED_HIGH1 = (12, 255, 255)
@@ -38,7 +39,7 @@ class SignDetector:
 
     def __init__(
         self,
-        predictor: Predictor,
+        predictor: "PredictorLike",
         red_hsv_low1: tuple[int, int, int] = _DEFAULT_RED_LOW1,
         red_hsv_high1: tuple[int, int, int] = _DEFAULT_RED_HIGH1,
         red_hsv_low2: tuple[int, int, int] = _DEFAULT_RED_LOW2,

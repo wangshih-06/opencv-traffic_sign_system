@@ -1,23 +1,104 @@
-﻿import { useEffect, useRef, useState } from "react";
-import { Camera, CircleStop, Gauge, Play, Radio, Upload, Video, Wifi, WifiOff } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import {
+  Activity,
+  Camera,
+  CircleStop,
+  Crosshair,
+  Gauge,
+  Layers3,
+  Play,
+  Radio,
+  ScanSearch,
+  Upload,
+  Video,
+  Wifi,
+  WifiOff,
+} from "lucide-react";
 import clsx from "clsx";
 import { Button } from "../components/Button";
 import { Card } from "../components/Card";
 import { streamUrl } from "../lib/api";
 import { formatPercent } from "../lib/format";
-import type { CacheStats, StreamMessage, TopKItem } from "../lib/types";
+import type { Detection, StreamMessage } from "../lib/types";
 import { useAppStore } from "../store/useAppStore";
+
+type FrameSize = { width: number; height: number };
+
+function DetectionOverlay({
+  detections,
+  frameSize,
+  selectedTrackId,
+  onSelect,
+}: {
+  detections: Detection[];
+  frameSize: FrameSize | null;
+  selectedTrackId: number | null;
+  onSelect: (trackId: number) => void;
+}) {
+  if (!frameSize || !detections.length) return null;
+
+  return (
+    <svg
+      className="tracking-overlay"
+      viewBox={`0 0 ${frameSize.width} ${frameSize.height}`}
+      preserveAspectRatio="xMidYMid meet"
+      role="img"
+      aria-label="实时交通标志检测框"
+    >
+      {detections.map((detection, index) => {
+        const [x, y, width, height] = detection.bbox;
+        const trackId = detection.track_id ?? index;
+        const selected = selectedTrackId === trackId;
+        const lost = (detection.lost_count ?? 0) > 0;
+        const label = `#${trackId} ${detection.class_name} ${formatPercent(detection.confidence)}`;
+        const labelWidth = Math.min(
+          Math.max(128, label.length * 8 + 18),
+          Math.max(128, frameSize.width - x),
+        );
+        const labelY = Math.max(0, y - 23);
+
+        return (
+          <g
+            key={`${trackId}-${index}`}
+            className={clsx(
+              "tracking-overlay__item",
+              `tracking-overlay__item--${detection.colour}`,
+              lost && "tracking-overlay__item--lost",
+              selected && "tracking-overlay__item--selected",
+            )}
+            onClick={() => onSelect(trackId)}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") onSelect(trackId);
+            }}
+          >
+            <rect className="tracking-overlay__hitbox" x={x} y={y} width={width} height={height} />
+            <rect className="tracking-overlay__box" x={x} y={y} width={width} height={height} rx={4} />
+            <rect className="tracking-overlay__label-bg" x={x} y={labelY} width={labelWidth} height={22} rx={5} />
+            <text className="tracking-overlay__label" x={x + 9} y={labelY + 15}>
+              {label}
+            </text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
 
 export function RealtimePage() {
   const [source, setSource] = useState<"camera" | "video">("camera");
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [running, setRunning] = useState(false);
   const [connection, setConnection] = useState<"idle" | "connecting" | "ready" | "error">("idle");
-  const [message, setMessage] = useState("等待启动实时识别");
-  const [result, setResult] = useState<(TopKItem & { reused?: boolean }) | null>(null);
+  const [message, setMessage] = useState("等待启动实时检测");
+  const [detections, setDetections] = useState<Detection[]>([]);
+  const [frameSize, setFrameSize] = useState<FrameSize | null>(null);
+  const [selectedTrackId, setSelectedTrackId] = useState<number | null>(null);
   const [fps, setFps] = useState(0);
   const [predictMs, setPredictMs] = useState(0);
-  const [cache, setCache] = useState<CacheStats | null>(null);
+  const [trackerMs, setTrackerMs] = useState(0);
+  const [processedFrames, setProcessedFrames] = useState(0);
   const [skipFrames, setSkipFrames] = useState(1);
   const selectedModel = useAppStore((state) => state.selectedModel);
   const addHistory = useAppStore((state) => state.addHistory);
@@ -28,7 +109,7 @@ export function RealtimePage() {
   const mediaRef = useRef<MediaStream | null>(null);
   const objectUrlRef = useRef<string | null>(null);
   const sendingRef = useRef(false);
-  const lastHistoryRef = useRef({ time: 0, classId: -1 });
+  const historyRef = useRef(new Map<number, number>());
 
   const cleanup = () => {
     if (timerRef.current) window.clearInterval(timerRef.current);
@@ -43,6 +124,7 @@ export function RealtimePage() {
       videoRef.current.pause();
       videoRef.current.srcObject = null;
       videoRef.current.removeAttribute("src");
+      videoRef.current.load();
     }
     setRunning(false);
     sendingRef.current = false;
@@ -53,7 +135,7 @@ export function RealtimePage() {
   const stop = () => {
     cleanup();
     setConnection("idle");
-    setMessage("实时识别已停止");
+    setMessage("实时检测已停止");
   };
 
   const sendFrame = () => {
@@ -87,11 +169,16 @@ export function RealtimePage() {
     }
 
     cleanup();
+    historyRef.current.clear();
     setConnection("connecting");
-    setMessage("正在连接视频源与识别服务…");
-    setResult(null);
+    setMessage("正在连接视频源与多目标检测服务…");
+    setDetections([]);
+    setFrameSize(null);
+    setSelectedTrackId(null);
     setFps(0);
     setPredictMs(0);
+    setTrackerMs(0);
+    setProcessedFrames(0);
 
     try {
       const video = videoRef.current!;
@@ -111,36 +198,53 @@ export function RealtimePage() {
 
       const socket = new WebSocket(streamUrl(selectedModel, skipFrames));
       socketRef.current = socket;
-      socket.onopen = () => setMessage("视频源已就绪，正在加载模型…");
+      socket.onopen = () => setMessage("视频源已就绪，正在加载检测模型…");
       socket.onmessage = (event) => {
         const data = JSON.parse(event.data) as StreamMessage;
         if (data.type === "ready") {
           setConnection("ready");
           setRunning(true);
-          setMessage("实时识别运行中");
+          setMessage("实时多目标检测运行中");
           timerRef.current = window.setInterval(sendFrame, 280);
-        } else if (data.type === "prediction" && data.result) {
+        } else if (data.type === "prediction") {
           sendingRef.current = false;
-          setResult(data.result);
+          const nextDetections = data.detections ?? [];
+          setDetections(nextDetections);
+          setFrameSize(data.image ?? null);
           setFps(data.fps ?? 0);
           setPredictMs(data.predict_ms ?? 0);
-          setCache(data.cache ?? null);
+          setTrackerMs(data.tracker_ms ?? 0);
+          setProcessedFrames(data.processed_frames ?? 0);
+          setSelectedTrackId((current) =>
+            current !== null && !nextDetections.some((item) => item.track_id === current)
+              ? null
+              : current,
+          );
+
           const now = Date.now();
-          if (!data.result.reused && (now - lastHistoryRef.current.time > 2500 || lastHistoryRef.current.classId !== data.result.class_id)) {
-            addHistory({
-              source,
-              filename: source === "camera" ? "浏览器摄像头" : videoFile?.name ?? "本地视频",
-              class_id: data.result.class_id,
-              class_name: data.result.class_name,
-              confidence: data.result.confidence,
-              duration_ms: data.predict_ms ?? 0,
-            });
-            lastHistoryRef.current = { time: now, classId: data.result.class_id };
+          if (!data.reused) {
+            nextDetections
+              .filter((item) => (item.lost_count ?? 0) === 0 && item.track_id !== undefined)
+              .forEach((item) => {
+                const trackId = item.track_id!;
+                const lastSeen = historyRef.current.get(trackId) ?? 0;
+                if (now - lastSeen < 5000) return;
+                addHistory({
+                  source,
+                  filename: source === "camera" ? "浏览器摄像头" : videoFile?.name ?? "本地视频",
+                  model: selectedModel,
+                  class_id: item.class_id,
+                  class_name: item.class_name,
+                  confidence: item.confidence,
+                  duration_ms: (data.predict_ms ?? 0) + (data.tracker_ms ?? 0),
+                });
+                historyRef.current.set(trackId, now);
+              });
           }
         } else if (data.type === "error") {
           sendingRef.current = false;
           setConnection("error");
-          setMessage(data.message ?? "识别服务返回错误");
+          setMessage(data.message ?? "检测服务返回错误");
         }
       };
       socket.onerror = () => {
@@ -150,7 +254,7 @@ export function RealtimePage() {
       };
       socket.onclose = () => {
         sendingRef.current = false;
-        if (running) setConnection("idle");
+        setRunning(false);
       };
     } catch (error) {
       cleanup();
@@ -158,6 +262,10 @@ export function RealtimePage() {
       setMessage(error instanceof Error ? error.message : "无法打开视频源");
     }
   };
+
+  const selectedDetection = selectedTrackId === null
+    ? detections[0] ?? null
+    : detections.find((item) => item.track_id === selectedTrackId) ?? detections[0] ?? null;
 
   return (
     <div className="page-stack">
@@ -178,18 +286,30 @@ export function RealtimePage() {
 
           <Card className="stream-card" padded={false}>
             <div className="video-stage">
-              <video ref={videoRef} muted playsInline className={clsx(!running && "video-stage__inactive")} />
+              <div className="video-frame">
+                <video ref={videoRef} muted playsInline className={clsx(!running && "video-stage__inactive")} />
+                {running && (
+                  <DetectionOverlay
+                    detections={detections}
+                    frameSize={frameSize}
+                    selectedTrackId={selectedTrackId}
+                    onSelect={setSelectedTrackId}
+                  />
+                )}
+              </div>
               <canvas ref={canvasRef} hidden />
               {!running && (
                 <div className="video-stage__placeholder">
                   <div className="live-visual"><span /><span /><Radio size={34} /></div>
                   <strong>{source === "camera" ? "摄像头尚未启动" : "视频尚未播放"}</strong>
-                  <p>{source === "camera" ? "授权浏览器访问摄像头后即可开始实时识别" : "选择本地视频文件并点击开始识别"}</p>
+                  <p>{source === "camera" ? "授权浏览器访问摄像头后即可开始多目标检测" : "选择本地视频并点击开始检测"}</p>
                 </div>
               )}
-              {running && result && (
-                <div className="live-result-overlay">
-                  <span>实时识别</span><strong>{result.class_name}</strong><b>{formatPercent(result.confidence)}</b>
+              {running && (
+                <div className="live-result-overlay live-result-overlay--multi">
+                  <span><ScanSearch size={12} />实时多目标检测</span>
+                  <strong>{detections.length ? `${detections.length} 个目标正在跟踪` : "暂未发现交通标志"}</strong>
+                  <b>{selectedDetection ? `当前 #${selectedDetection.track_id ?? "?"}` : "等待目标"}</b>
                 </div>
               )}
               <div className={clsx("connection-badge", `connection-badge--${connection}`)}>
@@ -198,12 +318,12 @@ export function RealtimePage() {
             </div>
             <div className="stream-controls">
               <div className="stream-setting">
-                <label htmlFor="skip">跳帧</label>
+                <label htmlFor="skip">检测跳帧</label>
                 <select id="skip" value={skipFrames} onChange={(event) => setSkipFrames(Number(event.target.value))} disabled={running}>
                   <option value={0}>不跳帧</option><option value={1}>每 2 帧</option><option value={2}>每 3 帧</option><option value={3}>每 4 帧</option>
                 </select>
               </div>
-              {running ? <Button variant="danger" icon={<CircleStop size={18} />} onClick={stop}>停止识别</Button> : <Button icon={<Play size={18} />} onClick={start}>开始实时识别</Button>}
+              {running ? <Button variant="danger" icon={<CircleStop size={18} />} onClick={stop}>停止检测</Button> : <Button icon={<Play size={18} />} onClick={start}>开始多目标检测</Button>}
             </div>
           </Card>
         </div>
@@ -211,24 +331,50 @@ export function RealtimePage() {
         <aside className="realtime-aside">
           <Card eyebrow="LIVE METRICS" title="实时性能">
             <div className="live-metrics-grid">
-              <div><Gauge size={18} /><span>处理帧率</span><strong>{fps.toFixed(1)} <small>FPS</small></strong></div>
-              <div><Radio size={18} /><span>推理延迟</span><strong>{predictMs.toFixed(0)} <small>ms</small></strong></div>
-              <div><Wifi size={18} /><span>缓存命中率</span><strong>{cache ? `${(cache.hit_rate * 100).toFixed(0)}%` : "—"}</strong></div>
-              <div><Camera size={18} /><span>处理帧数</span><strong>{cache?.total ?? 0}</strong></div>
+              <div><Gauge size={18} /><span>检测帧率</span><strong>{fps.toFixed(1)} <small>FPS</small></strong></div>
+              <div><Radio size={18} /><span>检测延迟</span><strong>{predictMs.toFixed(0)} <small>ms</small></strong></div>
+              <div><Activity size={18} /><span>跟踪耗时</span><strong>{trackerMs.toFixed(2)} <small>ms</small></strong></div>
+              <div><Layers3 size={18} /><span>处理帧数</span><strong>{processedFrames}</strong></div>
             </div>
           </Card>
-          <Card eyebrow="CURRENT RESULT" title="当前识别">
-            {result ? (
-              <div className="live-current-result">
-                <div className="live-current-result__sign">{String(result.class_id).padStart(2, "0")}</div>
-                <span>当前最可能类别</span><h3>{result.class_name}</h3>
-                <div className="confidence-line"><span style={{ width: `${(result.confidence ?? 0) * 100}%` }} /></div>
-                <strong>{formatPercent(result.confidence)} 置信度</strong>
+
+          <Card eyebrow="TRACKED OBJECTS" title={`当前目标 ${detections.length} 个`}>
+            {detections.length ? (
+              <div className="tracked-list">
+                {detections.map((item) => {
+                  const trackId = item.track_id ?? -1;
+                  const lost = (item.lost_count ?? 0) > 0;
+                  return (
+                    <button
+                      className={clsx("tracked-item", selectedTrackId === trackId && "tracked-item--selected", lost && "tracked-item--lost")}
+                      key={trackId}
+                      onClick={() => setSelectedTrackId(trackId)}
+                    >
+                      <span className={clsx("tracked-item__id", `tracked-item__id--${item.colour}`)}>#{trackId}</span>
+                      <span className="tracked-item__main"><strong>{item.class_name}</strong><small>{lost ? "短暂丢失 · 继续跟踪" : "当前帧已检测"}</small></span>
+                      <b>{formatPercent(item.confidence)}</b>
+                    </button>
+                  );
+                })}
               </div>
-            ) : <div className="result-empty result-empty--small"><Radio size={27} /><strong>等待视频帧</strong><p>实时结果将在识别服务就绪后显示。</p></div>}
+            ) : (
+              <div className="result-empty result-empty--small"><Crosshair size={27} /><strong>等待检测目标</strong><p>检测到多个交通标志后会在此显示 Track ID。</p></div>
+            )}
           </Card>
+
+          <Card eyebrow="CURRENT TARGET" title="当前选中目标">
+            {selectedDetection ? (
+              <div className="live-current-result">
+                <div className={clsx("live-current-result__sign", `live-current-result__sign--${selectedDetection.colour}`)}>{String(selectedDetection.class_id).padStart(2, "0")}</div>
+                <span>Track ID #{selectedDetection.track_id ?? "?"}</span><h3>{selectedDetection.class_name}</h3>
+                <div className="confidence-line"><span style={{ width: `${(selectedDetection.confidence ?? 0) * 100}%` }} /></div>
+                <strong>{formatPercent(selectedDetection.confidence)} 置信度</strong>
+              </div>
+            ) : <div className="result-empty result-empty--small"><Radio size={27} /><strong>等待视频帧</strong><p>实时目标将在检测服务就绪后显示。</p></div>}
+          </Card>
+
           <Card eyebrow="TIPS" title="使用建议">
-            <ul className="tips-list"><li>保持标志位于画面中央并避免强烈反光</li><li>摄像头识别建议使用 720p 或更高分辨率</li><li>提高跳帧数可以降低后端推理压力</li></ul>
+            <ul className="tips-list"><li>保持标志位于画面中央并避免强烈反光</li><li>检测框颜色代表候选标志的主色</li><li>同一目标会保持稳定的 Track ID</li><li>提高跳帧数可以降低后端推理压力</li></ul>
           </Card>
         </aside>
       </div>

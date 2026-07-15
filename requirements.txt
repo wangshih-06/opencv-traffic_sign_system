@@ -24,3 +24,9 @@ matplotlib>=3.10
 fastapi>=0.115,<1
 uvicorn[standard]>=0.34,<1
 python-multipart>=0.0.20,<1
+
+# ONNX 推理加速（可选）
+# 安装后可启用 OnnxPredictor 路径：模型加载一次常驻 worker 进程，
+# 推理比 sklearn joblib 快 2~10×。未安装时自动 fallback 到 joblib。
+onnxruntime>=1.18,<2   # 运行时依赖；未安装不影响 API 启动
+skl2onnx>=1.17,<2      # 仅训练/导出时需要；运行时可不装

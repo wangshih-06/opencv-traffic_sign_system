@@ -1,6 +1,11 @@
-﻿import type {
+import type {
   BatchResponse,
   DetectionResponse,
+  FeedbackCreate,
+  FeedbackListResponse,
+  FeedbackRecord,
+  FeedbackStats,
+  FeedbackStatus,
   HealthResponse,
   LabelItem,
   ModelsResponse,
@@ -68,6 +73,26 @@ export const api = {
       body,
     });
   },
+  feedback: (status?: FeedbackStatus | "all") => {
+    const params = new URLSearchParams();
+    if (status && status !== "all") params.set("status", status);
+    const query = params.toString();
+    return apiFetch<FeedbackListResponse>(`/api/feedback${query ? `?${query}` : ""}`);
+  },
+  createFeedback: (payload: FeedbackCreate) =>
+    apiFetch<{ ok: boolean; item: FeedbackRecord; stats: FeedbackStats }>("/api/feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+  updateFeedbackStatus: (id: string, status: FeedbackStatus) =>
+    apiFetch<{ ok: boolean; item: FeedbackRecord; stats: FeedbackStats }>(`/api/feedback/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status }),
+    }),
+  deleteFeedback: (id: string) =>
+    apiFetch<{ ok: boolean; stats: FeedbackStats }>(`/api/feedback/${id}`, { method: "DELETE" }),
 };
 
 export function streamUrl(bundle?: string | null, skipFrames = 1) {

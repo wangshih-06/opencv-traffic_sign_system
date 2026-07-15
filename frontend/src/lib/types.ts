@@ -1,4 +1,4 @@
-﻿export interface CacheStats {
+export interface CacheStats {
   hits: number;
   misses: number;
   total: number;
@@ -29,6 +29,9 @@ export interface Detection {
   bbox: [number, number, number, number];
   colour: "red" | "blue";
   confidence: number | null;
+  track_id?: number;
+  lost_count?: number;
+  shape_match?: boolean;
 }
 
 export interface DetectionResponse {
@@ -93,21 +96,92 @@ export interface HistoryItem {
   timestamp: number;
   source: "image" | "camera" | "video" | "batch";
   filename: string;
+  model?: string | null;
   class_id: number;
   class_name: string;
   confidence: number | null;
   duration_ms: number;
 }
 
+
+export type FeedbackVerdict = "correct" | "incorrect";
+export type FeedbackStatus = "new" | "reviewed" | "exported";
+
+export interface FeedbackCreate {
+  history_id?: string;
+  source: HistoryItem["source"];
+  filename: string;
+  model?: string | null;
+  predicted_class_id: number;
+  predicted_class_name: string;
+  predicted_confidence: number | null;
+  corrected_class_id?: number | null;
+  corrected_class_name?: string | null;
+  verdict: FeedbackVerdict;
+  note?: string;
+  bbox?: [number, number, number, number];
+}
+
+export interface FeedbackRecord {
+  id: string;
+  created_at: string;
+  updated_at: string;
+  history_id: string | null;
+  source: HistoryItem["source"];
+  filename: string;
+  model: string | null;
+  predicted_class_id: number;
+  predicted_class_name: string;
+  predicted_confidence: number | null;
+  corrected_class_id: number;
+  corrected_class_name: string;
+  verdict: FeedbackVerdict;
+  note: string;
+  bbox: [number, number, number, number] | null;
+  status: FeedbackStatus;
+}
+
+export interface FeedbackStats {
+  total: number;
+  correct: number;
+  incorrect: number;
+  new: number;
+  reviewed: number;
+  exported: number;
+}
+
+export interface FeedbackListResponse {
+  items: FeedbackRecord[];
+  count: number;
+  stats: FeedbackStats;
+}
+
 export interface StreamMessage {
   type: "ready" | "prediction" | "error" | "pong";
+  mode?: "detect-track";
   model?: string;
   message?: string;
   frame_index?: number;
-  result?: TopKItem & { reused?: boolean };
+  processed_frames?: number;
+  result?: {
+    class_id: number;
+    class_name: string;
+    confidence: number | null;
+    bbox?: [number, number, number, number];
+    colour?: "red" | "blue";
+    track_id?: number;
+    lost_count?: number;
+    reused?: boolean;
+  } | null;
+  detections?: Detection[];
+  detection_count?: number;
+  tracked_count?: number;
+  reused?: boolean;
   predict_ms?: number;
+  tracker_ms?: number;
   fps?: number;
   cache?: CacheStats;
+  image?: { width: number; height: number };
 }
 
 
