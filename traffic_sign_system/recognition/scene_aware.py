@@ -60,6 +60,19 @@ class SceneAnalyzer:
         if noise_score > self.noise_threshold:
             degradations.append("noise")
 
+        quality_components = self._quality_components(
+            brightness=brightness,
+            contrast=contrast,
+            blur_score=blur_score,
+            noise_score=noise_score,
+        )
+        quality_score = self._quality_score(quality_components)
+        quality_status = (
+            "good" if quality_score >= 80.0 else
+            "fair" if quality_score >= 60.0 else
+            "poor"
+        )
+
         self.last_analysis_seconds = time.perf_counter() - started
         return {
             "brightness": brightness,
@@ -67,8 +80,47 @@ class SceneAnalyzer:
             "blur_score": blur_score,
             "noise_score": noise_score,
             "degradations": degradations,
+            "quality_score": quality_score,
+            "quality_status": quality_status,
+            "quality_components": quality_components,
             "analysis_seconds": self.last_analysis_seconds,
         }
+
+    def _quality_components(
+        self,
+        *,
+        brightness: float,
+        contrast: float,
+        blur_score: float,
+        noise_score: float,
+    ) -> dict[str, float]:
+        """将原始指标归一化为可视化用的 0-100 分数。"""
+        if brightness < self.low_light_threshold:
+            brightness_quality = brightness / max(self.low_light_threshold, 1.0) * 100.0
+        elif brightness <= 220.0:
+            brightness_quality = 100.0
+        else:
+            brightness_quality = (255.0 - brightness) / 35.0 * 100.0
+
+        contrast_quality = contrast / max(self.fog_contrast_threshold, 1.0) * 100.0
+        sharpness_quality = blur_score / max(self.blur_threshold, 1.0) * 100.0
+        noise_quality = 100.0 * (1.0 - noise_score / max(self.noise_threshold * 2.0, 1e-6))
+        return {
+            "brightness": round(float(np.clip(brightness_quality, 0.0, 100.0)), 1),
+            "contrast": round(float(np.clip(contrast_quality, 0.0, 100.0)), 1),
+            "sharpness": round(float(np.clip(sharpness_quality, 0.0, 100.0)), 1),
+            "noise": round(float(np.clip(noise_quality, 0.0, 100.0)), 1),
+        }
+
+    @staticmethod
+    def _quality_score(components: dict[str, float]) -> float:
+        weighted = (
+            components["brightness"] * 0.25
+            + components["contrast"] * 0.25
+            + components["sharpness"] * 0.30
+            + components["noise"] * 0.20
+        )
+        return round(float(np.clip(weighted, 0.0, 100.0)), 1)
 
     def recommend_params(self, analysis: dict[str, Any]) -> dict[str, Any]:
         """根据分析结果推荐预处理参数。"""

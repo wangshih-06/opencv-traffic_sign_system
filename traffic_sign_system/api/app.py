@@ -532,6 +532,7 @@ async def detect(
         "count": worker_result.get("count", 0),
         "detect_seconds": elapsed,
         "cache": worker_result.get("cache") or {},
+        "scene": worker_result.get("scene") or {},
         "image": {"width": int(decoded.shape[1]), "height": int(decoded.shape[0])},
     }
 
@@ -676,6 +677,7 @@ async def stream_frames(
     window_start = time.perf_counter()
     last_tracks: list[dict[str, Any]] | None = None
     last_cache: dict[str, int | float] = {}
+    last_scene: dict[str, Any] = {}
 
     try:
         while True:
@@ -709,6 +711,7 @@ async def stream_frames(
                 )
                 tracker_ms = (time.perf_counter() - tracker_started) * 1000.0
                 last_cache = worker_result.get("cache") or {}
+                last_scene = worker_result.get("scene") or {}
                 processed_in_window += 1
                 processed_total += 1
 
@@ -743,6 +746,8 @@ async def stream_frames(
                     "tracker_ms": tracker_ms,
                     "fps": detection_fps,
                     "cache": last_cache,
+                    "scene": last_scene,
+                    "scene_reused": not should_detect,
                     "image": {
                         "width": int(image.shape[1]),
                         "height": int(image.shape[0]),

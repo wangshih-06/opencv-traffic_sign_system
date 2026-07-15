@@ -163,6 +163,10 @@ class AdaptiveSceneTests(unittest.TestCase):
             analysis = analyzer.analyze(self.low_light)
             samples.append(time.perf_counter() - started)
         self.assertIn("low_light", analysis["degradations"])
+        self.assertIn(analysis["quality_status"], {"good", "fair", "poor"})
+        self.assertGreaterEqual(float(analysis["quality_score"]), 0.0)
+        self.assertLessEqual(float(analysis["quality_score"]), 100.0)
+        self.assertEqual(set(analysis["quality_components"]), {"brightness", "contrast", "sharpness", "noise"})
         self.assertLess(float(np.mean(samples)) * 1000.0, 5.0)
 
 

@@ -41,6 +41,7 @@ export interface DetectionResponse {
   count: number;
   detect_seconds: number;
   cache: CacheStats;
+  scene?: SceneQuality;
   image: { width: number; height: number };
 }
 
@@ -187,6 +188,24 @@ export interface FeedbackListResponse {
   stats: FeedbackStats;
 }
 
+export interface SceneQuality {
+  brightness: number;
+  contrast: number;
+  blur_score: number;
+  noise_score: number;
+  degradations: Array<"low_light" | "fog" | "blur" | "noise">;
+  quality_score: number;
+  quality_status: "good" | "fair" | "poor";
+  quality_components: {
+    brightness: number;
+    contrast: number;
+    sharpness: number;
+    noise: number;
+  };
+  analysis_seconds: number;
+  recommendations?: Record<string, boolean | number | string>;
+}
+
 export interface StreamMessage {
   type: "ready" | "prediction" | "error" | "pong";
   mode?: "detect-track";
@@ -212,6 +231,8 @@ export interface StreamMessage {
   tracker_ms?: number;
   fps?: number;
   cache?: CacheStats;
+  scene?: SceneQuality;
+  scene_reused?: boolean;
   image?: { width: number; height: number };
 }
 

@@ -171,16 +171,21 @@ def _detect_remote(
     w: int,
 ) -> dict[str, Any]:
     """Detect + classify traffic signs on a single image."""
+    from traffic_sign_system.recognition.scene_aware import SceneAnalyzer
     from traffic_sign_system.recognition.sign_detector import SignDetector
 
     predictor = _get_worker_predictor(bundle_path)
     image = _decode_image(image_bytes, h, w)
+    scene_analyzer = SceneAnalyzer()
+    scene = scene_analyzer.analyze(image)
+    scene["recommendations"] = scene_analyzer.recommend_params(scene)
     detector = SignDetector(predictor)
     detections = detector.detect(image)
     return {
         "detections": detections,
         "count": len(detections),
         "cache": predictor.cache_stats(),
+        "scene": scene,
     }
 
 

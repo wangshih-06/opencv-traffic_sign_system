@@ -9,6 +9,9 @@ import {
   Play,
   Radio,
   ScanSearch,
+  ShieldCheck,
+  Sparkles,
+  TriangleAlert,
   Upload,
   Video,
   Wifi,
@@ -19,10 +22,40 @@ import { Button } from "../components/Button";
 import { Card } from "../components/Card";
 import { streamUrl } from "../lib/api";
 import { formatPercent } from "../lib/format";
-import type { Detection, StreamMessage } from "../lib/types";
+import type { Detection, SceneQuality, StreamMessage } from "../lib/types";
 import { useAppStore } from "../store/useAppStore";
 
 type FrameSize = { width: number; height: number };
+
+const SCENE_STATUS_LABEL: Record<SceneQuality["quality_status"], string> = {
+  good: "良好",
+  fair: "需关注",
+  poor: "较差",
+};
+
+const DEGRADATION_LABEL: Record<SceneQuality["degradations"][number], string> = {
+  low_light: "低光照",
+  fog: "低对比度",
+  blur: "画面模糊",
+  noise: "噪声偏高",
+};
+
+const DEGRADATION_ADVICE: Record<SceneQuality["degradations"][number], string> = {
+  low_light: "提高环境照明或开启补光",
+  fog: "增强画面对比度并检查镜头清洁度",
+  blur: "固定拍摄设备并减少运动或抖动",
+  noise: "增加照明并降低摄像头感光增益",
+};
+
+function qualityTrendPoints(values: number[]): string {
+  if (!values.length) return "";
+  const series = values.length === 1 ? [values[0], values[0]] : values;
+  return series.map((value, index) => {
+    const x = 4 + index * (232 / Math.max(series.length - 1, 1));
+    const y = 50 - Math.max(0, Math.min(100, value)) * 0.44;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+}
 
 function DetectionOverlay({
   detections,
@@ -100,6 +133,9 @@ export function RealtimePage() {
   const [trackerMs, setTrackerMs] = useState(0);
   const [processedFrames, setProcessedFrames] = useState(0);
   const [skipFrames, setSkipFrames] = useState(1);
+  const [sceneQuality, setSceneQuality] = useState<SceneQuality | null>(null);
+  const [sceneReused, setSceneReused] = useState(false);
+  const [qualityHistory, setQualityHistory] = useState<number[]>([]);
   const selectedModel = useAppStore((state) => state.selectedModel);
   const addHistory = useAppStore((state) => state.addHistory);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -179,6 +215,9 @@ export function RealtimePage() {
     setPredictMs(0);
     setTrackerMs(0);
     setProcessedFrames(0);
+    setSceneQuality(null);
+    setSceneReused(false);
+    setQualityHistory([]);
 
     try {
       const video = videoRef.current!;
@@ -215,6 +254,13 @@ export function RealtimePage() {
           setPredictMs(data.predict_ms ?? 0);
           setTrackerMs(data.tracker_ms ?? 0);
           setProcessedFrames(data.processed_frames ?? 0);
+          if (data.scene) {
+            setSceneQuality(data.scene);
+            setSceneReused(Boolean(data.scene_reused));
+            if (!data.scene_reused) {
+              setQualityHistory((current) => [...current.slice(-29), data.scene!.quality_score]);
+            }
+          }
           setSelectedTrackId((current) =>
             current !== null && !nextDetections.some((item) => item.track_id === current)
               ? null
@@ -266,6 +312,15 @@ export function RealtimePage() {
   const selectedDetection = selectedTrackId === null
     ? detections[0] ?? null
     : detections.find((item) => item.track_id === selectedTrackId) ?? detections[0] ?? null;
+  const sceneMetrics = sceneQuality ? [
+    { label: "亮度", score: sceneQuality.quality_components.brightness, raw: `${sceneQuality.brightness.toFixed(0)} / 255` },
+    { label: "对比度", score: sceneQuality.quality_components.contrast, raw: sceneQuality.contrast.toFixed(1) },
+    { label: "清晰度", score: sceneQuality.quality_components.sharpness, raw: sceneQuality.blur_score.toFixed(0) },
+    { label: "纯净度", score: sceneQuality.quality_components.noise, raw: `${(sceneQuality.noise_score * 100).toFixed(1)}% 噪声` },
+  ] : [];
+  const sceneAdvice = sceneQuality?.degradations.length
+    ? DEGRADATION_ADVICE[sceneQuality.degradations[0]]
+    : "当前画面质量稳定，适合进行交通标志检测。";
 
   return (
     <div className="page-stack">
@@ -295,6 +350,12 @@ export function RealtimePage() {
                     selectedTrackId={selectedTrackId}
                     onSelect={setSelectedTrackId}
                   />
+                )}
+                {running && sceneQuality && (
+                  <div className={clsx("scene-stage-badge", `scene-stage-badge--${sceneQuality.quality_status}`)}>
+                    {sceneQuality.quality_status === "good" ? <ShieldCheck size={14} /> : <TriangleAlert size={14} />}
+                    <span>场景质量</span><strong>{sceneQuality.quality_score.toFixed(0)}</strong>
+                  </div>
                 )}
               </div>
               <canvas ref={canvasRef} hidden />
@@ -336,6 +397,44 @@ export function RealtimePage() {
               <div><Activity size={18} /><span>跟踪耗时</span><strong>{trackerMs.toFixed(2)} <small>ms</small></strong></div>
               <div><Layers3 size={18} /><span>处理帧数</span><strong>{processedFrames}</strong></div>
             </div>
+          </Card>
+
+          <Card eyebrow="SCENE QUALITY" title="场景质量">
+            {sceneQuality ? (
+              <div className="scene-quality-panel">
+                <div className="scene-quality-summary">
+                  <div className={clsx("scene-score", `scene-score--${sceneQuality.quality_status}`)} style={{ background: `conic-gradient(var(--scene-accent) ${sceneQuality.quality_score * 3.6}deg, var(--grid) 0deg)` }}>
+                    <div><strong>{sceneQuality.quality_score.toFixed(0)}</strong><span>/ 100</span></div>
+                  </div>
+                  <div className="scene-quality-copy">
+                    <div className="scene-quality-status"><strong>{SCENE_STATUS_LABEL[sceneQuality.quality_status]}</strong><small>{sceneReused ? "沿用上一检测帧" : "刚刚更新"}</small></div>
+                    <p>{sceneAdvice}</p>
+                    <div className="scene-degradation-list">
+                      {sceneQuality.degradations.length ? sceneQuality.degradations.map((item) => <span key={item}>{DEGRADATION_LABEL[item]}</span>) : <span className="scene-degradation-list__ok">无明显退化</span>}
+                    </div>
+                  </div>
+                </div>
+                <div className="scene-trend" aria-label="最近场景质量趋势">
+                  <div><span>最近质量趋势</span><small>{qualityHistory.length ? `${qualityHistory.length} 个采样点` : "等待采样"}</small></div>
+                  <svg viewBox="0 0 240 54" role="img" aria-label="场景质量折线图">
+                    <path className="scene-trend__grid" d="M4 6H236 M4 28H236 M4 50H236" />
+                    {qualityHistory.length > 0 && <polyline className="scene-trend__line" points={qualityTrendPoints(qualityHistory)} />}
+                  </svg>
+                </div>
+                <div className="scene-quality-metrics">
+                  {sceneMetrics.map((item) => (
+                    <div className="scene-quality-metric" key={item.label}>
+                      <div><span>{item.label}</span><strong>{item.score.toFixed(0)}</strong></div>
+                      <div className="scene-quality-bar"><span style={{ width: `${item.score}%` }} /></div>
+                      <small>{item.raw}</small>
+                    </div>
+                  ))}
+                </div>
+                <div className="scene-quality-footnote"><Sparkles size={14} />自适应预处理已根据当前场景指标给出建议</div>
+              </div>
+            ) : (
+              <div className="result-empty result-empty--small"><Sparkles size={27} /><strong>等待场景分析</strong><p>启动实时检测后，将展示亮度、对比度、清晰度和噪声趋势。</p></div>
+            )}
           </Card>
 
           <Card eyebrow="TRACKED OBJECTS" title={`当前目标 ${detections.length} 个`}>

@@ -1,4 +1,4 @@
-"""WebSocket multi-object detection/tracking protocol tests."""
+﻿"""WebSocket multi-object detection/tracking protocol tests."""
 
 from __future__ import annotations
 
@@ -39,6 +39,23 @@ class _FakePool:
                 "hit_rate": 0.0,
                 "size": self.calls,
                 "maxsize": 256,
+            },
+            "scene": {
+                "brightness": 96.0,
+                "contrast": 48.0,
+                "blur_score": 72.0,
+                "noise_score": 0.04,
+                "degradations": [],
+                "quality_score": 97.5,
+                "quality_status": "good",
+                "quality_components": {
+                    "brightness": 100.0,
+                    "contrast": 100.0,
+                    "sharpness": 100.0,
+                    "noise": 87.5,
+                },
+                "analysis_seconds": 0.001,
+                "recommendations": {},
             },
         }
 
@@ -102,6 +119,8 @@ class StreamTrackingTests(unittest.TestCase):
         self.assertFalse(predictions[0]["reused"])
         self.assertTrue(predictions[1]["reused"])
         self.assertEqual(predictions[1]["predict_ms"], 0.0)
+        self.assertTrue(predictions[1]["scene_reused"])
+        self.assertEqual(predictions[1]["scene"]["quality_score"], 97.5)
         self.assertEqual(predictions[1]["detections"][0]["track_id"], 0)
         self.assertFalse(predictions[2]["reused"])
 
@@ -136,6 +155,9 @@ class StreamTrackingTests(unittest.TestCase):
         self.assertEqual(predictions[1]["detection_count"], 1)
         self.assertEqual(predictions[1]["processed_frames"], 2)
         self.assertEqual(predictions[1]["image"], {"width": 180, "height": 120})
+        self.assertEqual(predictions[1]["scene"]["quality_status"], "good")
+        self.assertIn("quality_components", predictions[1]["scene"])
+        self.assertFalse(predictions[1]["scene_reused"])
         self.assertFalse(predictions[1]["reused"])
 
 

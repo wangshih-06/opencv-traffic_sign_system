@@ -298,8 +298,7 @@ python -m traffic_sign_system.scripts.export_onnx svm_hog+hsv.joblib
 短暂丢失状态。前端使用 SVG 在摄像头或本地视频上绘制多个检测框，可点击检测框或
 目标列表查看类别、置信度和 Track ID。
 
-响应帧包含 `detections`、`detection_count`、`tracked_count`、`tracker_ms`、`image` 和
-`processed_frames` 等字段。跳帧时复用最近的跟踪结果，避免频繁推理。
+响应帧包含 `detections`、`detection_count`、`tracked_count`、`tracker_ms`、`image` 和 `processed_frames` 等字段，并增加 `scene`、`scene_reused` 场景质量数据。`scene` 包含综合评分、四项质量分解、退化标签和分析耗时；跳帧时复用最近的跟踪结果与场景指标，并通过 `scene_reused` 标识，避免频繁推理。
 
 ### 错例纠正与反馈闭环
 
@@ -568,9 +567,19 @@ python -m traffic_sign_system.scripts.verify_tracking `
     "blur_score": 42.5,
     "noise_score": 0.08,
     "degradations": ["low_light", "fog", "blur"],
+    "quality_score": 76.6,
+    "quality_status": "fair",
+    "quality_components": {
+        "brightness": 66.2,
+        "contrast": 78.0,
+        "sharpness": 85.0,
+        "noise": 75.0,
+    },
     "analysis_seconds": 0.0018,
 }
 ```
+
+Web 实时识别页会将场景质量以 0～100 综合评分、亮度/对比度/清晰度/纯净度四项进度条、最近采样趋势和退化标签展示在实时性能面板旁。评分较低时会给出补光、稳固设备、清洁镜头等操作建议；跳帧期间会明确标记当前指标沿用上一检测帧，避免误解为未更新。
 
 默认策略：
 
@@ -650,7 +659,7 @@ traffic_sign_system/models/artifacts/benchmark.json
 | `POST` | `/api/models/load` | 加载并预热模型 |
 | `DELETE` | `/api/models/cache` | 清空推理缓存 |
 | `POST` | `/api/predict` | 单图分类与 Top-K |
-| `POST` | `/api/detect` | 候选区域检测 |
+| `POST` | `/api/detect` | 候选区域检测，同时返回 `scene` 场景质量指标 |
 | `POST` | `/api/batch` | 最多 50 张图片批量分类，单文件失败不影响其他文件 |
 | `GET/POST` | `/api/feedback` | 查询或提交人工纠正反馈 |
 | `PATCH/DELETE` | `/api/feedback/{id}` | 更新反馈状态或删除记录 |
