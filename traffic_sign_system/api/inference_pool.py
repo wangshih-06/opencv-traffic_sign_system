@@ -155,10 +155,13 @@ def _predict_remote(
 def _predict_batch_remote(
     bundle_path: str,
     payloads: list[tuple[bytes, int, int]],
-) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
     predictor = _get_worker_predictor(bundle_path)
     images = [_decode_image(b, h, w) for b, h, w in payloads]
-    return predictor.predict_batch(images)
+    return {
+        "results": predictor.predict_batch(images),
+        "cache": predictor.cache_stats(),
+    }
 
 
 def _detect_remote(
@@ -281,11 +284,20 @@ class InferencePool:
     ) -> list[dict[str, Any]]:
         loop = asyncio.get_running_loop()
         bundle_path, payloads = self._serialize_batch(bundle_path, images)
-        return await self._submit(
+        payload = await self._submit(
             _predict_batch_remote,
             (bundle_path, payloads),
             timeout=timeout,
         )
+        if not isinstance(payload, dict) or "results" not in payload:
+            raise ValueError("batch worker returned an invalid response")
+        cache = payload.get("cache")
+        if isinstance(cache, dict):
+            self._record_cache_stats(bundle_path, cache)
+        results = payload["results"]
+        if not isinstance(results, list):
+            raise ValueError("batch worker returned invalid results")
+        return results
 
     async def detect(
         self,

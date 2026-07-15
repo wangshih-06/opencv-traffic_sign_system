@@ -19,14 +19,14 @@ export function BatchPage() {
     mutationFn: () => api.batch(files, selectedModel),
     onSuccess: (response) => {
       setResult(response);
-      response.items.forEach((item) => addHistory({
+      response.items.filter((item) => item.ok).forEach((item) => addHistory({
         source: "batch",
         filename: item.filename,
-        model: selectedModel,
+        model: item.model ?? selectedModel,
         class_id: item.class_id,
         class_name: item.class_name,
         confidence: item.confidence,
-        duration_ms: response.predict_seconds * 1000 / Math.max(response.count, 1),
+        duration_ms: item.predict_seconds * 1000,
       }));
     },
   });
@@ -34,15 +34,19 @@ export function BatchPage() {
   const summary = useMemo(() => {
     if (!result) return [];
     const counts = new Map<string, number>();
-    result.items.forEach((item) => counts.set(item.class_name, (counts.get(item.class_name) ?? 0) + 1));
+    result.items.forEach((item) => {
+      if (item.ok) counts.set(item.class_name, (counts.get(item.class_name) ?? 0) + 1);
+    });
     return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
   }, [result]);
 
   const exportCsv = () => {
     if (!result) return;
     const rows = [
-      ["文件名", "类别编号", "类别名称", "置信度"],
-      ...result.items.map((item) => [item.filename, item.class_id, item.class_name, item.confidence ?? ""]),
+      ["文件名", "处理状态", "类别编号", "类别名称", "置信度", "错误信息"],
+      ...result.items.map((item) => item.ok
+        ? [item.filename, "成功", item.class_id, item.class_name, item.confidence ?? "", ""]
+        : [item.filename, "失败", "", "", "", item.error.message]),
     ];
     const csv = rows.map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(",")).join("\n");
     const blob = new Blob(["\ufeff", csv], { type: "text/csv;charset=utf-8" });
@@ -76,10 +80,11 @@ export function BatchPage() {
               </div>
             )}
             <div className="batch-actions">
-              <span>批量接口会一次完成特征提取与模型推理，减少重复开销。</span>
+              <span>批量接口会隔离单文件错误；异常文件不会中断其他图片的识别。</span>
               <Button icon={<Play size={17} />} loading={mutation.isPending} disabled={!files.length || !selectedModel} onClick={() => mutation.mutate()}>开始批量识别</Button>
             </div>
             {mutation.error && <div className="error-message">{mutation.error instanceof Error ? mutation.error.message : "批量识别失败"}</div>}
+            {result && result.failed_count > 0 && <div className="batch-partial-message"><XCircle size={15} />本次有 {result.failed_count} 个文件处理失败，其余结果已正常保留。</div>}
           </Card>
 
           <Card eyebrow="RESULT TABLE" title="处理结果" action={result && <Button variant="secondary" size="sm" icon={<Download size={15} />} onClick={exportCsv}>导出 CSV</Button>}>
@@ -88,12 +93,15 @@ export function BatchPage() {
                 <table className="data-table">
                   <thead><tr><th>文件名</th><th>识别类别</th><th>类别 ID</th><th>置信度</th><th>状态</th></tr></thead>
                   <tbody>{result.items.map((item, index) => (
-                    <tr key={`${item.filename}-${index}`}>
+                    <tr key={`${item.filename}-${index}`} className={!item.ok ? "batch-result-row--failed" : undefined}>
                       <td><span className="table-file"><Files size={15} />{item.filename}</span></td>
-                      <td><strong>{item.class_name}</strong></td>
-                      <td>#{String(item.class_id).padStart(2, "0")}</td>
-                      <td><span className="table-confidence"><i><b style={{ width: `${(item.confidence ?? 0) * 100}%` }} /></i>{formatPercent(item.confidence)}</span></td>
-                      <td><span className="status-tag status-tag--success"><CheckCircle2 size={13} />完成</span></td>
+                      <td>{item.ok ? <strong>{item.class_name}</strong> : <span className="batch-error-text" title={item.error.message}>{item.error.message}</span>}</td>
+                      <td>{item.ok ? `#${String(item.class_id).padStart(2, "0")}` : "—"}</td>
+                      <td>{item.ok ? <span className="table-confidence"><i><b style={{ width: `${(item.confidence ?? 0) * 100}%` }} /></i>{formatPercent(item.confidence)}</span> : "—"}</td>
+                      <td>{item.ok
+                        ? <span className="status-tag status-tag--success"><CheckCircle2 size={13} />完成</span>
+                        : <span className="status-tag status-tag--danger"><XCircle size={13} />失败</span>}
+                      </td>
                     </tr>
                   ))}</tbody>
                 </table>
@@ -108,10 +116,10 @@ export function BatchPage() {
           <Card eyebrow="BATCH SUMMARY" title="任务概览">
             <div className="summary-stack">
               <div><span className="summary-icon summary-icon--blue"><Files size={18} /></span><p>输入文件<strong>{files.length}</strong></p></div>
-              <div><span className="summary-icon summary-icon--green"><CheckCircle2 size={18} /></span><p>成功处理<strong>{result?.count ?? 0}</strong></p></div>
-              <div><span className="summary-icon summary-icon--red"><XCircle size={18} /></span><p>处理失败<strong>0</strong></p></div>
+              <div><span className="summary-icon summary-icon--green"><CheckCircle2 size={18} /></span><p>成功处理<strong>{result?.success_count ?? 0}</strong></p></div>
+              <div><span className="summary-icon summary-icon--red"><XCircle size={18} /></span><p>处理失败<strong>{result?.failed_count ?? 0}</strong></p></div>
             </div>
-            <div className="batch-timing"><span>总耗时</span><strong>{result ? formatDuration(result.predict_seconds) : "—"}</strong><small>{result ? `平均 ${formatDuration(result.predict_seconds / Math.max(result.count, 1))} / 张` : "任务完成后显示"}</small></div>
+            <div className="batch-timing"><span>总耗时</span><strong>{result ? formatDuration(result.predict_seconds) : "—"}</strong><small>{result ? `平均 ${formatDuration(result.predict_seconds / Math.max(result.success_count, 1))} / 张` : "任务完成后显示"}</small></div>
           </Card>
           <Card eyebrow="TOP CLASSES" title="主要类别">
             {summary.length ? <div className="class-summary-list">{summary.map(([name, count], index) => <div key={name}><span>{index + 1}</span><strong>{name}</strong><b>{count} 张</b></div>)}</div> : <div className="inline-empty">暂无类别统计</div>}

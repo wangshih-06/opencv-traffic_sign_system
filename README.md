@@ -293,13 +293,13 @@ python -m traffic_sign_system.scripts.export_onnx svm_hog+hsv.joblib
 ### WS 实时多目标检测与跟踪
 
 `/ws/stream` 使用进程池执行 `SignDetector` 多目标检测与分类，每个 WebSocket 连接
+
 独立维护 `SimpleTracker`，返回稳定的 `track_id`、平滑检测框、类别投票结果和
 短暂丢失状态。前端使用 SVG 在摄像头或本地视频上绘制多个检测框，可点击检测框或
 目标列表查看类别、置信度和 Track ID。
 
 响应帧包含 `detections`、`detection_count`、`tracked_count`、`tracker_ms`、`image` 和
 `processed_frames` 等字段。跳帧时复用最近的跟踪结果，避免频繁推理。
-
 
 ### 错例纠正与反馈闭环
 
@@ -651,11 +651,13 @@ traffic_sign_system/models/artifacts/benchmark.json
 | `DELETE` | `/api/models/cache` | 清空推理缓存 |
 | `POST` | `/api/predict` | 单图分类与 Top-K |
 | `POST` | `/api/detect` | 候选区域检测 |
-| `POST` | `/api/batch` | 最多 50 张图片批量分类 |
+| `POST` | `/api/batch` | 最多 50 张图片批量分类，单文件失败不影响其他文件 |
 | `GET/POST` | `/api/feedback` | 查询或提交人工纠正反馈 |
 | `PATCH/DELETE` | `/api/feedback/{id}` | 更新反馈状态或删除记录 |
 | `GET` | `/api/feedback/export` | 导出反馈 CSV |
 | `WS` | `/ws/stream` | 浏览器视频帧实时多目标检测与跟踪 |
+
+批量响应会统一返回 `model`、`count`、`success_count`、`failed_count`、`predict_seconds` 和 `cache`，每个文件包含 `ok`、结果或结构化 `error`。向量批量推理失败时，API 会自动回退到逐文件推理，避免单文件异常导致整批失败。
 
 接口限制：
 

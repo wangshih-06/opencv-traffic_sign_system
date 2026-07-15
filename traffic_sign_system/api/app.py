@@ -303,6 +303,76 @@ def _select_primary_track(tracks: list[dict[str, Any]]) -> dict[str, Any] | None
     )
 
 
+def _batch_error_payload(exc: Exception) -> dict[str, Any]:
+    status_code = int(getattr(exc, "status_code", 500))
+    detail = getattr(exc, "detail", str(exc))
+    if not isinstance(detail, str):
+        detail = json.dumps(detail, ensure_ascii=False)
+    code_by_status = {
+        400: "invalid_image",
+        413: "file_too_large",
+        415: "unsupported_media_type",
+    }
+    return {
+        "code": code_by_status.get(
+            status_code, "inference_error" if status_code >= 500 else "file_error"
+        ),
+        "message": detail or "\u6587\u4ef6\u5904\u7406\u5931\u8d25",
+        "status_code": status_code,
+    }
+
+
+def _batch_failure_item(filename: str, exc: Exception) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "model": None,
+        "filename": filename,
+        "class_id": None,
+        "class_name": None,
+        "confidence": None,
+        "predict_seconds": 0.0,
+        "top_k": [],
+        "cache": {},
+        "image": None,
+        "error": _batch_error_payload(exc),
+    }
+
+
+def _batch_success_item(
+    *,
+    model: str,
+    filename: str,
+    image: np.ndarray,
+    result: dict[str, Any],
+    elapsed: float,
+    cache: dict[str, int | float],
+) -> dict[str, Any]:
+    class_id = result.get("class_id")
+    class_name = result.get("class_name")
+    if class_id is None or class_name is None:
+        raise ValueError("\u6a21\u578b\u8fd4\u56de\u4e86\u4e0d\u5b8c\u6574\u7684\u5206\u7c7b\u7ed3\u679c")
+    top_k = result.get("top_k") or [
+        {
+            "class_id": int(class_id),
+            "class_name": str(class_name),
+            "confidence": result.get("confidence"),
+        }
+    ]
+    return {
+        "ok": True,
+        "model": model,
+        "filename": filename,
+        "class_id": int(class_id),
+        "class_name": str(class_name),
+        "confidence": result.get("confidence"),
+        "predict_seconds": float(elapsed),
+        "top_k": top_k,
+        "cache": result.get("cache") or cache,
+        "image": {"width": int(image.shape[1]), "height": int(image.shape[0])},
+        "error": None,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -471,31 +541,100 @@ async def batch_predict(
     images: list[UploadFile] = File(...),
     bundle: str | None = Query(default=None),
 ) -> dict[str, Any]:
-    if not images:
-        raise HTTPException(status_code=400, detail="请至少选择一张图片")
-    if len(images) > MAX_BATCH_FILES:
-        raise HTTPException(status_code=400, detail=f"单次最多处理 {MAX_BATCH_FILES} 张图片")
+    """Batch classify files while isolating per-file upload/inference failures.
 
-    decoded_images: list[np.ndarray] = []
-    filenames: list[str] = []
-    for upload in images:
-        _raw, decoded = await _read_upload(upload)
-        decoded_images.append(decoded)
-        filenames.append(upload.filename or f"image-{len(filenames) + 1}")
+    The fast vectorised path is used whenever possible. If one valid image
+    makes the vectorised predictor fail, the request is retried one file at a
+    time so healthy files still produce results and the failed filename gets a
+    structured error item.
+    """
+    if not images:
+        raise HTTPException(status_code=400, detail="\u8bf7\u81f3\u5c11\u9009\u62e9\u4e00\u5f20\u56fe\u7247")
+    if len(images) > MAX_BATCH_FILES:
+        raise HTTPException(status_code=400, detail=f"\u5355\u6b21\u6700\u591a\u5904\u7406 {MAX_BATCH_FILES} \u5f20\u56fe\u7247")
 
     path = _resolve_bundle(bundle, active=app.state.active_bundle)
     pool: InferencePool = app.state.inference_pool
-    started = time.perf_counter()
-    results = await pool.predict_batch(path, decoded_images)
-    elapsed = time.perf_counter() - started
+    items: list[dict[str, Any] | None] = [None] * len(images)
+    valid_entries: list[tuple[int, str, np.ndarray]] = []
+
+    for index, upload in enumerate(images):
+        filename = upload.filename or f"image-{index + 1}"
+        try:
+            _raw, decoded = await _read_upload(upload)
+        except Exception as exc:  # noqa: BLE001 - preserve one-file failure
+            items[index] = _batch_failure_item(filename, exc)
+        else:
+            valid_entries.append((index, filename, decoded))
+
+    inference_started = time.perf_counter()
+    if valid_entries:
+        valid_images = [entry[2] for entry in valid_entries]
+        try:
+            batch_results = await pool.predict_batch(path, valid_images)
+            if len(batch_results) != len(valid_entries):
+                raise ValueError(
+                    "\u6279\u91cf\u6a21\u578b\u8fd4\u56de\u6570\u91cf\u4e0e\u8f93\u5165\u6587\u4ef6\u6570\u91cf\u4e0d\u4e00\u81f4"
+                )
+            elapsed = time.perf_counter() - inference_started
+            per_file_elapsed = elapsed / len(valid_entries)
+            cache = pool.cache_stats_for(path) or {}
+            for (index, filename, image), result in zip(
+                valid_entries, batch_results, strict=True
+            ):
+                items[index] = _batch_success_item(
+                    model=path.name,
+                    filename=filename,
+                    image=image,
+                    result=result,
+                    elapsed=per_file_elapsed,
+                    cache=cache,
+                )
+        except Exception as batch_exc:  # noqa: BLE001 - retry per file
+            logger.warning(
+                "batch inference failed; retrying files individually: %s",
+                batch_exc,
+            )
+
+            async def predict_one(
+                entry: tuple[int, str, np.ndarray],
+            ) -> tuple[int, dict[str, Any]]:
+                index, filename, image = entry
+                started = time.perf_counter()
+                try:
+                    worker_result = await pool.predict(path, image, top_k=1)
+                    elapsed = time.perf_counter() - started
+                    cache = pool.cache_stats_for(path) or {}
+                    item = _batch_success_item(
+                        model=path.name,
+                        filename=filename,
+                        image=image,
+                        result=worker_result.get("result") or {},
+                        elapsed=elapsed,
+                        cache=worker_result.get("cache") or cache,
+                    )
+                except Exception as exc:  # noqa: BLE001 - isolate one file
+                    item = _batch_failure_item(filename, exc)
+                return index, item
+
+            individual_results = await asyncio.gather(
+                *(predict_one(entry) for entry in valid_entries)
+            )
+            for index, item in individual_results:
+                items[index] = item
+
+    final_items = [item for item in items if item is not None]
+    success_count = sum(bool(item["ok"]) for item in final_items)
+    failed_count = len(final_items) - success_count
+    elapsed = time.perf_counter() - inference_started if valid_entries else 0.0
     return {
         "model": path.name,
-        "count": len(results),
+        "count": len(final_items),
+        "success_count": success_count,
+        "failed_count": failed_count,
         "predict_seconds": elapsed,
-        "items": [
-            {"filename": filename, **result}
-            for filename, result in zip(filenames, results, strict=True)
-        ],
+        "cache": pool.cache_stats_for(path) or {},
+        "items": final_items,
     }
 
 

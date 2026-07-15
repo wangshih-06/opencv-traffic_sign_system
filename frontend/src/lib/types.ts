@@ -44,19 +44,50 @@ export interface DetectionResponse {
   image: { width: number; height: number };
 }
 
-export interface BatchItem {
+export interface BatchItemError {
+  code: "invalid_image" | "file_too_large" | "unsupported_media_type" | "file_error" | "inference_error";
+  message: string;
+  status_code: number;
+}
+
+export interface BatchSuccessItem {
+  ok: true;
+  model: string;
+  filename: string;
   class_id: number;
   class_name: string;
-  filename: string;
   confidence: number | null;
+  predict_seconds: number;
+  top_k: TopKItem[];
+  cache: Partial<CacheStats>;
+  image: { width: number; height: number };
+  error: null;
 }
+
+export interface BatchFailureItem {
+  ok: false;
+  model: null;
+  filename: string;
+  class_id: null;
+  class_name: null;
+  confidence: null;
+  predict_seconds: 0;
+  top_k: [];
+  cache: Partial<CacheStats>;
+  image: null;
+  error: BatchItemError;
+}
+
+export type BatchItem = BatchSuccessItem | BatchFailureItem;
 
 export interface BatchResponse {
   model: string;
   count: number;
+  success_count: number;
+  failed_count: number;
   predict_seconds: number;
   items: BatchItem[];
-  cache: CacheStats;
+  cache: Partial<CacheStats>;
 }
 
 export interface HealthResponse {
