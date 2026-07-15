@@ -5,6 +5,7 @@ import clsx from "clsx";
 import { Button } from "../components/Button";
 import { Card } from "../components/Card";
 import { DetectionCanvas } from "../components/DetectionCanvas";
+import { DetectionEngineControl } from "../components/DetectionEngineControl";
 import { DropZone } from "../components/DropZone";
 import { PredictionPanel } from "../components/PredictionPanel";
 import { api } from "../lib/api";
@@ -16,6 +17,7 @@ export function ImagePage() {
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const selectedModel = useAppStore((state) => state.selectedModel);
+  const detectionEngine = useAppStore((state) => state.detectionEngine);
   const prediction = useAppStore((state) => state.prediction);
   const detection = useAppStore((state) => state.detection);
   const setPrediction = useAppStore((state) => state.setPrediction);
@@ -46,7 +48,7 @@ export function ImagePage() {
   });
 
   const detectMutation = useMutation({
-    mutationFn: () => api.detect(file!, selectedModel),
+    mutationFn: () => api.detect(file!, selectedModel, detectionEngine),
     onSuccess: (result) => {
       setDetection(result);
       setPrediction(null);
@@ -99,6 +101,12 @@ export function ImagePage() {
             </div>
           </Card>
 
+          {mode === "detect" && (
+            <Card eyebrow="DETECTION ENGINE" title="选择识别后端">
+              <DetectionEngineControl />
+            </Card>
+          )}
+
           <Card
             eyebrow="INPUT IMAGE"
             title="上传识别图片"
@@ -137,6 +145,18 @@ export function ImagePage() {
             ) : detection ? (
               <div className="detection-results">
                 <div className="detection-summary"><div><strong>{detection.count}</strong><span>检测到的标志</span></div><div><strong>{formatDuration(detection.detect_seconds)}</strong><span>总处理耗时</span></div></div>
+                <div className={clsx("engine-result-badge", detection.fallback && "engine-result-badge--warning")}>
+                  <strong>
+                    {detection.engine_used === "deep"
+                      ? "深度引擎"
+                      : detection.engine_used === "hybrid"
+                        ? "混合引擎"
+                        : "传统引擎"}
+                    {detection.fallback ? " · 已回退" : ""}
+                  </strong>
+                  {detection.deep_inference_ms != null && <span>ONNX {detection.deep_inference_ms.toFixed(1)} ms</span>}
+                  {detection.warning && <small>{detection.warning}</small>}
+                </div>
                 {detection.detections.length ? detection.detections.map((item, index) => (
                   <div className="detection-result-item" key={`${item.class_id}-${index}`}>
                     <span className={clsx("colour-dot", `colour-dot--${item.colour}`)} />

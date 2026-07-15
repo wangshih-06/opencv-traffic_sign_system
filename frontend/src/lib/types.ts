@@ -23,6 +23,30 @@ export interface Prediction extends TopKItem {
   reused?: boolean;
 }
 
+export type DetectionEngine = "traditional" | "deep" | "hybrid";
+
+export interface DetectionEngineInfo {
+  id: DetectionEngine;
+  label: string;
+  description: string;
+  available: boolean;
+  degraded?: boolean;
+  requires_model: boolean;
+}
+
+export interface DeepDetectorModel {
+  name: string;
+  size_bytes: number;
+  modified_at: number;
+  metadata: boolean;
+}
+
+export interface DetectionEnginesResponse {
+  default_engine: DetectionEngine;
+  engines: DetectionEngineInfo[];
+  deep_models: DeepDetectorModel[];
+}
+
 export interface Detection {
   class_id: number;
   class_name: string;
@@ -32,6 +56,11 @@ export interface Detection {
   track_id?: number;
   lost_count?: number;
   shape_match?: boolean;
+  engine?: DetectionEngine;
+  sources?: DetectionEngine[];
+  detector_confidence?: number | null;
+  deep_class_id?: number;
+  deep_class_name?: string;
 }
 
 export interface DetectionResponse {
@@ -40,8 +69,14 @@ export interface DetectionResponse {
   detections: Detection[];
   count: number;
   detect_seconds: number;
-  cache: CacheStats;
+  cache: Partial<CacheStats>;
   scene?: SceneQuality;
+  engine_requested?: DetectionEngine;
+  engine_used?: DetectionEngine;
+  deep_model?: string | null;
+  fallback?: boolean;
+  warning?: string | null;
+  deep_inference_ms?: number | null;
   image: { width: number; height: number };
 }
 
@@ -210,6 +245,12 @@ export interface StreamMessage {
   type: "ready" | "prediction" | "error" | "pong";
   mode?: "detect-track";
   model?: string;
+  engine_requested?: DetectionEngine;
+  engine_used?: DetectionEngine;
+  deep_model?: string | null;
+  fallback?: boolean;
+  warning?: string | null;
+  deep_inference_ms?: number | null;
   message?: string;
   frame_index?: number;
   processed_frames?: number;

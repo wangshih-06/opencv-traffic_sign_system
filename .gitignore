@@ -37,6 +37,7 @@ traffic_sign_system/dataset/test/**
 # Generated model and evaluation artifacts
 traffic_sign_system/models/artifacts/**
 !traffic_sign_system/models/artifacts/.gitkeep
+traffic_sign_system/models/detectors/*.onnx
 *.joblib
 *.pkl
 *.pickle

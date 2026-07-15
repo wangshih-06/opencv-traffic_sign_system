@@ -20,9 +20,10 @@ import {
 import clsx from "clsx";
 import { Button } from "../components/Button";
 import { Card } from "../components/Card";
+import { DetectionEngineControl } from "../components/DetectionEngineControl";
 import { streamUrl } from "../lib/api";
 import { formatPercent } from "../lib/format";
-import type { Detection, SceneQuality, StreamMessage } from "../lib/types";
+import type { Detection, DetectionEngine, SceneQuality, StreamMessage } from "../lib/types";
 import { useAppStore } from "../store/useAppStore";
 
 type FrameSize = { width: number; height: number };
@@ -137,6 +138,11 @@ export function RealtimePage() {
   const [sceneReused, setSceneReused] = useState(false);
   const [qualityHistory, setQualityHistory] = useState<number[]>([]);
   const selectedModel = useAppStore((state) => state.selectedModel);
+  const detectionEngine = useAppStore((state) => state.detectionEngine);
+  const [engineUsed, setEngineUsed] = useState<DetectionEngine>(detectionEngine);
+  const [engineFallback, setEngineFallback] = useState(false);
+  const [engineWarning, setEngineWarning] = useState<string | null>(null);
+  const [deepInferenceMs, setDeepInferenceMs] = useState<number | null>(null);
   const addHistory = useAppStore((state) => state.addHistory);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -218,6 +224,10 @@ export function RealtimePage() {
     setSceneQuality(null);
     setSceneReused(false);
     setQualityHistory([]);
+    setEngineUsed(detectionEngine);
+    setEngineFallback(false);
+    setEngineWarning(null);
+    setDeepInferenceMs(null);
 
     try {
       const video = videoRef.current!;
@@ -235,7 +245,7 @@ export function RealtimePage() {
       }
       await video.play();
 
-      const socket = new WebSocket(streamUrl(selectedModel, skipFrames));
+      const socket = new WebSocket(streamUrl(selectedModel, skipFrames, detectionEngine));
       socketRef.current = socket;
       socket.onopen = () => setMessage("视频源已就绪，正在加载检测模型…");
       socket.onmessage = (event) => {
@@ -254,6 +264,10 @@ export function RealtimePage() {
           setPredictMs(data.predict_ms ?? 0);
           setTrackerMs(data.tracker_ms ?? 0);
           setProcessedFrames(data.processed_frames ?? 0);
+          setEngineUsed(data.engine_used ?? detectionEngine);
+          setEngineFallback(Boolean(data.fallback));
+          setEngineWarning(data.warning ?? null);
+          setDeepInferenceMs(data.deep_inference_ms ?? null);
           if (data.scene) {
             setSceneQuality(data.scene);
             setSceneReused(Boolean(data.scene_reused));
@@ -337,6 +351,9 @@ export function RealtimePage() {
                 <input type="file" accept="video/mp4,video/webm,video/quicktime" hidden onChange={(event) => setVideoFile(event.target.files?.[0] ?? null)} disabled={running} />
               </label>
             )}
+            <div className="realtime-engine-control">
+              <DetectionEngineControl compact disabled={running} />
+            </div>
           </Card>
 
           <Card className="stream-card" padded={false}>
@@ -378,6 +395,12 @@ export function RealtimePage() {
               </div>
             </div>
             <div className="stream-controls">
+              <div className={clsx("engine-live-status", engineFallback && "engine-live-status--warning")}>
+                <span>{engineUsed === "deep" ? "深度引擎" : engineUsed === "hybrid" ? "混合引擎" : "传统引擎"}</span>
+                {engineFallback && <b>已回退</b>}
+                {deepInferenceMs != null && <small>ONNX {deepInferenceMs.toFixed(1)} ms</small>}
+                {engineWarning && <small title={engineWarning}>{engineWarning}</small>}
+              </div>
               <div className="stream-setting">
                 <label htmlFor="skip">检测跳帧</label>
                 <select id="skip" value={skipFrames} onChange={(event) => setSkipFrames(Number(event.target.value))} disabled={running}>

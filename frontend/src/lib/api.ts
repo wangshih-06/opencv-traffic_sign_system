@@ -1,5 +1,7 @@
 import type {
   BatchResponse,
+  DetectionEngine,
+  DetectionEnginesResponse,
   DetectionResponse,
   FeedbackCreate,
   FeedbackListResponse,
@@ -37,6 +39,7 @@ function withBundle(path: string, bundle?: string | null, extra?: Record<string,
 export const api = {
   health: () => apiFetch<HealthResponse>("/api/health"),
   models: () => apiFetch<ModelsResponse>("/api/models"),
+  detectionEngines: () => apiFetch<DetectionEnginesResponse>("/api/detection-engines"),
   labels: async () => {
     const response = await apiFetch<{ count: number; items: LabelItem[] }>("/api/labels");
     return response.items;
@@ -57,10 +60,17 @@ export const api = {
       { method: "POST", body },
     );
   },
-  detect: (file: File, bundle?: string | null) => {
+  detect: (
+    file: File,
+    bundle?: string | null,
+    engine: DetectionEngine = "traditional",
+    detectorModel?: string | null,
+  ) => {
     const body = new FormData();
     body.append("image", file);
-    return apiFetch<DetectionResponse>(withBundle("/api/detect", bundle), {
+    const extra: Record<string, string> = { engine };
+    if (detectorModel) extra.detector_model = detectorModel;
+    return apiFetch<DetectionResponse>(withBundle("/api/detect", bundle, extra), {
       method: "POST",
       body,
     });
@@ -95,9 +105,18 @@ export const api = {
     apiFetch<{ ok: boolean; stats: FeedbackStats }>(`/api/feedback/${id}`, { method: "DELETE" }),
 };
 
-export function streamUrl(bundle?: string | null, skipFrames = 1) {
+export function streamUrl(
+  bundle?: string | null,
+  skipFrames = 1,
+  engine: DetectionEngine = "traditional",
+  detectorModel?: string | null,
+) {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const params = new URLSearchParams({ skip_frames: String(skipFrames) });
+  const params = new URLSearchParams({
+    skip_frames: String(skipFrames),
+    engine,
+  });
   if (bundle) params.set("bundle", bundle);
+  if (detectorModel) params.set("detector_model", detectorModel);
   return `${protocol}//${window.location.host}/ws/stream?${params.toString()}`;
 }

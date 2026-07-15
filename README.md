@@ -784,3 +784,56 @@ traffic_sign_system/dataset/train/Train/<ClassId>/*.png
 ## 使用说明
 
 本仓库当前没有单独的开源许可证文件，默认仅用于学习、课程设计和技术演示。公开发布、商用或二次分发前，请补充明确的许可证，并确认 GTSRB 数据集及所有第三方依赖的授权条款。
+
+## 深度模型 / 传统模型双引擎
+
+Web 同时提供传统、深度和混合三种检测引擎：
+
+```mermaid
+flowchart LR
+    A[Image or video] --> B{Select engine}
+    B --> C[Traditional: HSV contour + HOG/HSV]
+    B --> D[Deep: OpenCV DNN + ONNX]
+    C --> E[Traditional detections]
+    D --> F[Deep detections]
+    E --> G[Hybrid IoU merge]
+    F --> G
+    G --> H[Tracking and Web UI]
+```
+
+| 引擎 | 说明 | 没有 ONNX 模型时 |
+| --- | --- | --- |
+| `traditional` | 原有 HSV / 轮廓候选区域 + HOG/HSV 分类器 | 始终可用 |
+| `deep` | OpenCV `cv2.dnn` 加载 ONNX 目标检测模型 | 返回错误，不静默降级 |
+| `hybrid` | 同时执行两种引擎，通过 IoU 合并重叠框 | 自动回退到 `traditional` |
+
+### 模型部署
+
+将目标检测 ONNX 模型放在：
+
+```text
+traffic_sign_system/models/detectors/traffic_sign_detector.onnx
+```
+
+可选同名 sidecar 配置：
+
+```json
+{
+  "input_size": 640,
+  "num_classes": 43,
+  "labels": {"0": "限速20公里/小时"},
+  "confidence_threshold": 0.35,
+  "nms_threshold": 0.45,
+  "output_format": "auto"
+}
+```
+
+当前解码器兼容 YOLOv5 `N x (5 + classes)`、YOLOv8 `N x (4 + classes)`、NMS-ready `N x 6`、OpenCV/SSD `N x 7`，并支持常见转置输出。
+
+### API
+
+- `GET /api/detection-engines`：返回引擎可用性和 ONNX 模型列表。
+- `POST /api/detect?engine=traditional|deep|hybrid`：单图检测。
+- `WS /ws/stream?engine=traditional|deep|hybrid`：实时多目标检测与跟踪。
+
+返回结果会包含 `engine_requested`、`engine_used`、`fallback`、`warning` 和 `deep_inference_ms`，可用于前端展示与监控。

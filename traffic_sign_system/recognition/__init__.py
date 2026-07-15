@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Union
 
+from .detection_engines import DeepOnnxDetector, DetectionEngine, merge_detections
 from .onnx_predictor import OnnxPredictor
 from .predictor import Predictor
 from .scene_aware import SceneAnalyzer
@@ -16,6 +17,9 @@ PredictorLike = Union[Predictor, OnnxPredictor]
 
 __all__ = [
     "Predictor",
+    "DetectionEngine",
+    "DeepOnnxDetector",
+    "merge_detections",
     "PredictorLike",
     "OnnxPredictor",
     "SceneAnalyzer",

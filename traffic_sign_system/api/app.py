@@ -35,6 +35,7 @@ from traffic_sign_system.api.feedback_store import FeedbackStore
 from traffic_sign_system.api.inference_pool import InferencePool
 from traffic_sign_system.config.labels import get_all_labels
 from traffic_sign_system.models.model_manager import load_bundle
+from traffic_sign_system.recognition.detection_engines import list_engine_metadata
 from traffic_sign_system.recognition.tracker import SimpleTracker
 
 logger = logging.getLogger(__name__)
@@ -42,7 +43,10 @@ logger = logging.getLogger(__name__)
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 PROJECT_ROOT = PACKAGE_ROOT.parent
 ARTIFACTS_DIR = PACKAGE_ROOT / "models" / "artifacts"
+DETECTOR_ARTIFACTS_DIR = PACKAGE_ROOT / "models" / "detectors"
 DEFAULT_BUNDLE_NAME = "svm_hog+hsv.joblib"
+DEFAULT_DEEP_DETECTOR_NAME = "traffic_sign_detector.onnx"
+SUPPORTED_DETECTION_ENGINES = {"traditional", "deep", "hybrid"}
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/bmp"}
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_BATCH_FILES = 50
@@ -166,6 +170,52 @@ def _bundle_files() -> list[Path]:
     if not ARTIFACTS_DIR.exists():
         return []
     return sorted(ARTIFACTS_DIR.glob("*.joblib"), key=lambda path: path.name.lower())
+
+
+def _deep_detector_files() -> list[Path]:
+    if not DETECTOR_ARTIFACTS_DIR.exists():
+        return []
+    return sorted(DETECTOR_ARTIFACTS_DIR.glob("*.onnx"), key=lambda path: path.name.lower())
+
+
+def _normalize_detection_engine(value: Any) -> str:
+    """Normalize endpoint values for FastAPI and direct function calls.
+
+    Direct unit-test calls receive the declared ``Query`` object instead of
+    its default value. Treat that object as the traditional engine so legacy
+    callers remain compatible.
+    """
+    if isinstance(value, str) and value in SUPPORTED_DETECTION_ENGINES:
+        return value
+    return "traditional"
+
+
+def _resolve_deep_detector(
+    name: str | None = None,
+    *,
+    required: bool = False,
+) -> Path | None:
+    """Resolve an optional ONNX object detector inside the detector artifact directory."""
+    files = _deep_detector_files()
+    if not files:
+        if required:
+            raise HTTPException(
+                status_code=503,
+                detail="\u672a\u914d\u7f6e ONNX \u6df1\u5ea6\u68c0\u6d4b\u6a21\u578b\uff0c\u8bf7\u5c06 .onnx \u6587\u4ef6\u653e\u5165 traffic_sign_system/models/detectors",
+            )
+        return None
+    requested = name or (
+        DEFAULT_DEEP_DETECTOR_NAME
+        if (DETECTOR_ARTIFACTS_DIR / DEFAULT_DEEP_DETECTOR_NAME).is_file()
+        else files[0].name
+    )
+    candidate = (DETECTOR_ARTIFACTS_DIR / Path(requested).name).resolve()
+    detector_root = DETECTOR_ARTIFACTS_DIR.resolve()
+    if detector_root not in candidate.parents or candidate.suffix.lower() != ".onnx":
+        raise HTTPException(status_code=400, detail="\u6df1\u5ea6\u68c0\u6d4b\u6a21\u578b\u5fc5\u987b\u662f\u6a21\u578b\u76ee\u5f55\u4e2d\u7684 .onnx \u6587\u4ef6")
+    if not candidate.is_file():
+        raise HTTPException(status_code=404, detail=f"\u6df1\u5ea6\u68c0\u6d4b\u6a21\u578b\u4e0d\u5b58\u5728\uff1a{candidate.name}")
+    return candidate
 
 
 def _resolve_bundle(bundle: str | None = None, *, active: str | None = None) -> Path:
@@ -441,6 +491,40 @@ def export_feedback(status: str | None = Query(default=None)) -> StreamingRespon
     )
 
 
+@app.get("/api/detection-engines")
+def list_detection_engines() -> dict[str, Any]:
+    deep_models = list_engine_metadata(DETECTOR_ARTIFACTS_DIR)
+    deep_available = bool(deep_models)
+    return {
+        "default_engine": "traditional",
+        "engines": [
+            {
+                "id": "traditional",
+                "label": "\u4f20\u7edf\u5f15\u64ce",
+                "description": "HSV/\u8f6e\u5ed3\u5019\u9009\u533a\u57df + HOG/HSV \u5206\u7c7b\u5668",
+                "available": True,
+                "requires_model": True,
+            },
+            {
+                "id": "deep",
+                "label": "\u6df1\u5ea6\u5f15\u64ce",
+                "description": "OpenCV DNN \u52a0\u8f7d ONNX \u76ee\u6807\u68c0\u6d4b\u5668",
+                "available": deep_available,
+                "requires_model": True,
+            },
+            {
+                "id": "hybrid",
+                "label": "\u6df7\u5408\u5f15\u64ce",
+                "description": "\u4f20\u7edf\u5019\u9009\u6846\u4e0e ONNX \u68c0\u6d4b\u7ed3\u679c\u878d\u5408",
+                "available": True,
+                "degraded": not deep_available,
+                "requires_model": True,
+            },
+        ],
+        "deep_models": deep_models,
+    }
+
+
 @app.get("/api/labels")
 def labels() -> dict[str, Any]:
     return {
@@ -518,16 +602,37 @@ async def predict(
 async def detect(
     image: UploadFile = File(...),
     bundle: str | None = Query(default=None),
+    engine: Literal["traditional", "deep", "hybrid"] = Query(default="traditional"),
+    detector_model: str | None = Query(default=None),
 ) -> dict[str, Any]:
+    engine = _normalize_detection_engine(engine)
+    detector_model = detector_model if isinstance(detector_model, str) else None
     _raw, decoded = await _read_upload(image)
     path = _resolve_bundle(bundle, active=app.state.active_bundle)
+    deep_path = _resolve_deep_detector(
+        detector_model, required=engine == "deep"
+    )
     pool: InferencePool = app.state.inference_pool
     started = time.perf_counter()
-    worker_result = await pool.detect(path, decoded)
+    if engine == "traditional":
+        worker_result = await pool.detect(path, decoded)
+    else:
+        worker_result = await pool.detect(
+            path,
+            decoded,
+            engine=engine,
+            deep_model_path=deep_path,
+        )
     elapsed = time.perf_counter() - started
     return {
         "model": path.name,
         "filename": image.filename,
+        "engine_requested": worker_result.get("engine_requested", engine),
+        "engine_used": worker_result.get("engine_used", engine),
+        "deep_model": worker_result.get("deep_model") or (deep_path.name if deep_path else None),
+        "fallback": bool(worker_result.get("fallback", False)),
+        "warning": worker_result.get("warning"),
+        "deep_inference_ms": worker_result.get("deep_inference_ms"),
         "detections": worker_result.get("detections", []),
         "count": worker_result.get("count", 0),
         "detect_seconds": elapsed,
@@ -644,6 +749,8 @@ async def stream_frames(
     websocket: WebSocket,
     bundle: str | None = Query(default=None),
     skip_frames: int = Query(default=1, ge=0, le=10),
+    engine: Literal["traditional", "deep", "hybrid"] = Query(default="traditional"),
+    detector_model: str | None = Query(default=None),
 ) -> None:
     """Detect and track multiple traffic signs in browser-sent JPEG frames.
 
@@ -652,12 +759,23 @@ async def stream_frames(
     connection, which preserves track IDs without introducing cross-process
     session affinity. Skipped frames reuse the latest tracked boxes.
     """
+    engine = _normalize_detection_engine(engine)
+    detector_model = detector_model if isinstance(detector_model, str) else None
     await websocket.accept()
     pool: InferencePool = app.state.inference_pool
     try:
         path = _resolve_bundle(bundle, active=app.state.active_bundle)
+        deep_path = _resolve_deep_detector(
+            detector_model, required=engine == "deep"
+        )
         await websocket.send_json(
-            {"type": "ready", "model": path.name, "mode": "detect-track"}
+            {
+                "type": "ready",
+                "model": path.name,
+                "mode": "detect-track",
+                "engine_requested": engine,
+                "deep_model": deep_path.name if deep_path else None,
+            }
         )
     except HTTPException as exc:
         await websocket.send_json({"type": "error", "message": str(exc.detail)})
@@ -678,6 +796,13 @@ async def stream_frames(
     last_tracks: list[dict[str, Any]] | None = None
     last_cache: dict[str, int | float] = {}
     last_scene: dict[str, Any] = {}
+    last_engine_meta: dict[str, Any] = {
+        "engine_requested": engine,
+        "engine_used": engine,
+        "deep_model": deep_path.name if deep_path else None,
+        "fallback": False,
+        "warning": None,
+    }
 
     try:
         while True:
@@ -702,7 +827,15 @@ async def stream_frames(
 
             if should_detect:
                 started = time.perf_counter()
-                worker_result = await pool.detect(path, image)
+                if engine == "traditional":
+                    worker_result = await pool.detect(path, image)
+                else:
+                    worker_result = await pool.detect(
+                        path,
+                        image,
+                        engine=engine,
+                        deep_model_path=deep_path,
+                    )
                 detection_ms = (time.perf_counter() - started) * 1000.0
 
                 tracker_started = time.perf_counter()
@@ -712,6 +845,14 @@ async def stream_frames(
                 tracker_ms = (time.perf_counter() - tracker_started) * 1000.0
                 last_cache = worker_result.get("cache") or {}
                 last_scene = worker_result.get("scene") or {}
+                last_engine_meta = {
+                    "engine_requested": worker_result.get("engine_requested", engine),
+                    "engine_used": worker_result.get("engine_used", engine),
+                    "deep_model": worker_result.get("deep_model") or (deep_path.name if deep_path else None),
+                    "fallback": bool(worker_result.get("fallback", False)),
+                    "warning": worker_result.get("warning"),
+                    "deep_inference_ms": worker_result.get("deep_inference_ms"),
+                }
                 processed_in_window += 1
                 processed_total += 1
 
@@ -731,6 +872,12 @@ async def stream_frames(
                 {
                     "type": "prediction",
                     "mode": "detect-track",
+                    "engine_requested": last_engine_meta["engine_requested"],
+                    "engine_used": last_engine_meta["engine_used"],
+                    "deep_model": last_engine_meta["deep_model"],
+                    "fallback": last_engine_meta["fallback"],
+                    "warning": last_engine_meta["warning"],
+                    "deep_inference_ms": last_engine_meta.get("deep_inference_ms"),
                     "frame_index": frame_index,
                     "processed_frames": processed_total,
                     "result": (

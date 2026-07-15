@@ -68,6 +68,7 @@ logger = logging.getLogger(__name__)
 # multiprocessing.spawn re-imports the module in each child.
 
 _WORKER_PREDICTORS: dict[str, tuple[Any, float]] = {}  # path -> (predictor, mtime)
+_WORKER_DEEP_DETECTORS: dict[str, tuple[Any, tuple[int, int | None]]] = {}
 _WORKER_LOCK = threading.Lock()
 
 
@@ -114,6 +115,33 @@ def _get_worker_predictor(bundle_path: str) -> Any:
 
 
 # ── Remote functions (must be top-level for pickle) ────────────────────
+
+
+def _get_worker_deep_detector(model_path: str | None) -> Any | None:
+    """Load and cache one OpenCV-DNN ONNX detector per worker process."""
+    if not model_path:
+        return None
+    from traffic_sign_system.recognition.detection_engines import DeepOnnxDetector
+
+    path = Path(model_path).resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"Deep detector does not exist: {path}")
+    sidecar = path.with_suffix(".json")
+    revision = (
+        path.stat().st_mtime_ns,
+        sidecar.stat().st_mtime_ns if sidecar.is_file() else None,
+    )
+    key = str(path)
+    with _WORKER_LOCK:
+        cached = _WORKER_DEEP_DETECTORS.get(key)
+        if cached is not None and cached[1] == revision:
+            return cached[0]
+
+    logger.info("[worker] loading deep ONNX detector: %s", path)
+    detector = DeepOnnxDetector(path)
+    with _WORKER_LOCK:
+        _WORKER_DEEP_DETECTORS[key] = (detector, revision)
+    return detector
 
 
 def _decode_image(image_bytes: bytes, h: int, w: int) -> np.ndarray:
@@ -169,23 +197,41 @@ def _detect_remote(
     image_bytes: bytes,
     h: int,
     w: int,
+    engine: str,
+    deep_model_path: str | None,
 ) -> dict[str, Any]:
-    """Detect + classify traffic signs on a single image."""
+    """Detect traffic signs with the selected traditional/deep/hybrid engine."""
+    from traffic_sign_system.recognition.detection_engines import run_detection_engine
     from traffic_sign_system.recognition.scene_aware import SceneAnalyzer
-    from traffic_sign_system.recognition.sign_detector import SignDetector
 
-    predictor = _get_worker_predictor(bundle_path)
+    predictor = _get_worker_predictor(bundle_path) if engine != "deep" else None
+    deep_load_warning: str | None = None
+    try:
+        deep_detector = _get_worker_deep_detector(deep_model_path)
+    except Exception as exc:
+        if engine == "deep":
+            raise
+        deep_detector = None
+        deep_load_warning = f"\u004f\u004e\u004e\u0058 \u6df1\u5ea6\u6a21\u578b\u52a0\u8f7d\u5931\u8d25\uff0c\u6df7\u5408\u5f15\u64ce\u5df2\u56de\u9000\uff1a{exc}"
     image = _decode_image(image_bytes, h, w)
     scene_analyzer = SceneAnalyzer()
     scene = scene_analyzer.analyze(image)
     scene["recommendations"] = scene_analyzer.recommend_params(scene)
-    detector = SignDetector(predictor)
-    detections = detector.detect(image)
+    engine_result = run_detection_engine(
+        predictor, image, engine, deep_detector=deep_detector
+    )
+    detections = list(engine_result.pop("detections"))
+    if deep_load_warning:
+        engine_result["fallback"] = True
+        engine_result["warning"] = deep_load_warning
     return {
         "detections": detections,
         "count": len(detections),
-        "cache": predictor.cache_stats(),
+        "cache": predictor.cache_stats() if predictor is not None else {},
         "scene": scene,
+        "engine_requested": engine,
+        "deep_model": Path(deep_model_path).name if deep_model_path else None,
+        **engine_result,
     }
 
 
@@ -309,16 +355,20 @@ class InferencePool:
         bundle_path: Path | str,
         image: np.ndarray,
         *,
+        engine: str = "traditional",
+        deep_model_path: Path | str | None = None,
         timeout: float | None = 30.0,
     ) -> dict[str, Any]:
         bundle_path, image_bytes, h, w = self._serialize_single(bundle_path, image)
+        deep_path = str(Path(deep_model_path).resolve()) if deep_model_path else None
         result = await self._submit(
             _detect_remote,
-            (bundle_path, image_bytes, h, w),
+            (bundle_path, image_bytes, h, w, engine, deep_path),
             timeout=timeout,
         )
-        if "cache" in result:
-            self._record_cache_stats(bundle_path, result["cache"])
+        cache = result.get("cache")
+        if isinstance(cache, dict) and cache:
+            self._record_cache_stats(bundle_path, cache)
         return result
 
     async def clear_cache(
