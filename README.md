@@ -302,9 +302,13 @@ python -m traffic_sign_system.scripts.export_onnx svm_hog+hsv.joblib
 
 ### 错例纠正与反馈闭环
 
-Web 端“反馈闭环”页面可从当前会话历史中选择识别结果，标记“识别正确”或“错例”，
-并为错例选择真实类别、填写备注。反馈数据使用 SQLite 保存到 `runtime/feedback.db`，
-支持“待复核 → 已复核 → 已导出”状态流转，可导出 UTF-8 CSV 作为后续重训和混淆分析的标注清单。
+Web 端“反馈闭环”页面会将单图、批量和实时识别中低于阈值（默认 70%，可调整）的结果自动加入待复核队列，
+并按历史记录 ID 去重。人工可确认“识别正确”或修正真实类别、填写备注；提交后对应队列自动标记为已复核。
+反馈与队列数据均使用 SQLite 保存到 `runtime/feedback.db`，支持导出 UTF-8 CSV 作为后续重训和混淆分析的标注清单。
+
+- `POST /api/review-queue`：创建低置信度待复核任务（幂等）。
+- `GET /api/review-queue?status=pending`：获取待人工判断的任务。
+- `PATCH /api/review-queue/{id}`：忽略不需要处理的任务。
 
 ### 启动 React Web 前端
 

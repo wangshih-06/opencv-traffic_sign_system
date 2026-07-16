@@ -72,6 +72,32 @@ class FeedbackStore:
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_feedback_created ON feedback(created_at DESC)"
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS review_queue (
+                    id TEXT PRIMARY KEY,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    history_id TEXT NOT NULL UNIQUE,
+                    source TEXT NOT NULL,
+                    filename TEXT NOT NULL,
+                    model TEXT,
+                    predicted_class_id INTEGER NOT NULL,
+                    predicted_class_name TEXT NOT NULL,
+                    predicted_confidence REAL,
+                    bbox_json TEXT,
+                    reason TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    feedback_id TEXT
+                )
+                """
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_review_queue_status ON review_queue(status)"
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_review_queue_created ON review_queue(created_at DESC)"
+            )
 
     @staticmethod
     def _now() -> str:
@@ -176,6 +202,115 @@ class FeedbackStore:
         with self._lock, self._session() as connection:
             cursor = connection.execute("DELETE FROM feedback WHERE id = ?", (feedback_id,))
         return cursor.rowcount > 0
+
+    def enqueue_review(self, payload: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+        """Add a low-confidence result to the review queue exactly once."""
+        now = self._now()
+        record = {
+            "id": uuid.uuid4().hex,
+            "created_at": now,
+            "updated_at": now,
+            "history_id": payload["history_id"],
+            "source": payload["source"],
+            "filename": payload["filename"],
+            "model": payload.get("model"),
+            "predicted_class_id": int(payload["predicted_class_id"]),
+            "predicted_class_name": payload["predicted_class_name"],
+            "predicted_confidence": payload.get("predicted_confidence"),
+            "bbox_json": json.dumps(payload.get("bbox"), ensure_ascii=False) if payload.get("bbox") else None,
+            "reason": payload.get("reason", "low_confidence"),
+            "status": "pending",
+            "feedback_id": None,
+        }
+        with self._lock, self._session() as connection:
+            cursor = connection.execute(
+                """
+                INSERT OR IGNORE INTO review_queue (
+                    id, created_at, updated_at, history_id, source, filename, model,
+                    predicted_class_id, predicted_class_name, predicted_confidence,
+                    bbox_json, reason, status, feedback_id
+                ) VALUES (
+                    :id, :created_at, :updated_at, :history_id, :source, :filename, :model,
+                    :predicted_class_id, :predicted_class_name, :predicted_confidence,
+                    :bbox_json, :reason, :status, :feedback_id
+                )
+                """,
+                record,
+            )
+            row = connection.execute(
+                "SELECT * FROM review_queue WHERE history_id = ?", (record["history_id"],)
+            ).fetchone()
+        return self._row_to_dict(row), cursor.rowcount > 0
+
+    def list_review_queue(
+        self, *, status: str | None = None, limit: int = 100, offset: int = 0
+    ) -> tuple[list[dict[str, Any]], int]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if status:
+            clauses.append("status = ?")
+            params.append(status)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._lock, self._session() as connection:
+            total = int(connection.execute(
+                f"SELECT COUNT(*) FROM review_queue {where}", params
+            ).fetchone()[0])
+            rows = connection.execute(
+                f"SELECT * FROM review_queue {where} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                [*params, limit, offset],
+            ).fetchall()
+        return [self._row_to_dict(row) for row in rows], total
+
+    def review_queue_stats(self) -> dict[str, int]:
+        with self._lock, self._session() as connection:
+            rows = connection.execute(
+                "SELECT status, COUNT(*) AS count FROM review_queue GROUP BY status"
+            ).fetchall()
+        result = {"total": 0, "pending": 0, "reviewed": 0, "dismissed": 0}
+        for row in rows:
+            count = int(row["count"])
+            result["total"] += count
+            result[row["status"]] = count
+        return result
+
+    def get_review_queue_item(self, queue_id: str) -> dict[str, Any] | None:
+        with self._lock, self._session() as connection:
+            row = connection.execute(
+                "SELECT * FROM review_queue WHERE id = ?", (queue_id,)
+            ).fetchone()
+        return self._row_to_dict(row) if row else None
+
+    def resolve_review_queue(self, queue_id: str, feedback_id: str) -> dict[str, Any] | None:
+        now = self._now()
+        with self._lock, self._session() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE review_queue
+                SET status = 'reviewed', feedback_id = ?, updated_at = ?
+                WHERE id = ? AND status = 'pending'
+                """,
+                (feedback_id, now, queue_id),
+            )
+            if cursor.rowcount == 0:
+                return None
+            row = connection.execute(
+                "SELECT * FROM review_queue WHERE id = ?", (queue_id,)
+            ).fetchone()
+        return self._row_to_dict(row) if row else None
+
+    def update_review_queue_status(self, queue_id: str, status: str) -> dict[str, Any] | None:
+        now = self._now()
+        with self._lock, self._session() as connection:
+            cursor = connection.execute(
+                "UPDATE review_queue SET status = ?, updated_at = ? WHERE id = ?",
+                (status, now, queue_id),
+            )
+            if cursor.rowcount == 0:
+                return None
+            row = connection.execute(
+                "SELECT * FROM review_queue WHERE id = ?", (queue_id,)
+            ).fetchone()
+        return self._row_to_dict(row) if row else None
 
     def export_csv(self, *, status: str | None = None) -> str:
         items, _ = self.list(status=status, limit=100_000, offset=0)

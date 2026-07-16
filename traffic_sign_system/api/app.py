@@ -52,6 +52,7 @@ MAX_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_BATCH_FILES = 50
 FEEDBACK_DB_PATH = PROJECT_ROOT / "runtime" / "feedback.db"
 FEEDBACK_STATUSES = {"new", "reviewed", "exported"}
+REVIEW_QUEUE_STATUSES = {"pending", "reviewed", "dismissed"}
 
 
 # ---------------------------------------------------------------------------
@@ -125,10 +126,29 @@ class FeedbackCreateRequest(BaseModel):
     verdict: Literal["correct", "incorrect"]
     note: str = Field(default="", max_length=1000)
     bbox: list[float] | None = None
+    review_queue_id: str | None = Field(default=None, max_length=64)
 
 
 class FeedbackStatusRequest(BaseModel):
     status: Literal["new", "reviewed", "exported"]
+
+
+class ReviewQueueCreateRequest(BaseModel):
+    """A low-confidence recognition result awaiting a human decision."""
+
+    history_id: str = Field(min_length=1, max_length=128)
+    source: Literal["image", "camera", "video", "batch"]
+    filename: str = Field(min_length=1, max_length=255)
+    model: str | None = Field(default=None, max_length=255)
+    predicted_class_id: int = Field(ge=0)
+    predicted_class_name: str = Field(min_length=1, max_length=255)
+    predicted_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    bbox: list[float] | None = None
+    reason: Literal["low_confidence"] = "low_confidence"
+
+
+class ReviewQueueStatusRequest(BaseModel):
+    status: Literal["dismissed"]
 
 
 
@@ -163,6 +183,19 @@ def _normalise_feedback(request: FeedbackCreateRequest) -> dict[str, Any]:
     payload["predicted_class_name"] = request.predicted_class_name.strip()
     payload["filename"] = request.filename.strip()
     payload["note"] = request.note.strip()
+    return payload
+
+
+def _normalise_review_queue(request: ReviewQueueCreateRequest) -> dict[str, Any]:
+    labels = get_all_labels()
+    if request.predicted_class_id not in labels:
+        raise HTTPException(status_code=400, detail="预测类别编号不在当前标签集中")
+    if request.bbox is not None and len(request.bbox) != 4:
+        raise HTTPException(status_code=400, detail="bbox 必须包含 x、y、width、height 四个值")
+    payload = request.model_dump()
+    payload["filename"] = request.filename.strip()
+    # Store the canonical local label so the queue stays consistent after a UI refresh.
+    payload["predicted_class_name"] = labels[request.predicted_class_id]
     return payload
 
 
@@ -459,8 +492,24 @@ def list_feedback(
 
 @app.post("/api/feedback", status_code=201)
 def create_feedback(request: FeedbackCreateRequest) -> dict[str, Any]:
-    record = _feedback_store().create(_normalise_feedback(request))
-    return {"ok": True, "item": record, "stats": _feedback_store().stats()}
+    store = _feedback_store()
+    if request.review_queue_id:
+        queue_item = store.get_review_queue_item(request.review_queue_id)
+        if queue_item is None:
+            raise HTTPException(status_code=404, detail="待复核记录不存在")
+        if queue_item["status"] != "pending":
+            raise HTTPException(status_code=409, detail="该待复核记录已处理")
+        if queue_item["history_id"] != request.history_id:
+            raise HTTPException(status_code=400, detail="待复核记录与识别历史不匹配")
+    record = store.create(_normalise_feedback(request))
+    if request.review_queue_id:
+        store.resolve_review_queue(request.review_queue_id, record["id"])
+    return {
+        "ok": True,
+        "item": record,
+        "stats": store.stats(),
+        "review_queue": store.review_queue_stats(),
+    }
 
 
 @app.patch("/api/feedback/{feedback_id}")
@@ -476,6 +525,38 @@ def delete_feedback(feedback_id: str) -> dict[str, Any]:
     if not _feedback_store().delete(feedback_id):
         raise HTTPException(status_code=404, detail="反馈记录不存在")
     return {"ok": True, "stats": _feedback_store().stats()}
+
+
+@app.get("/api/review-queue")
+def list_review_queue(
+    status: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, Any]:
+    if status is not None and status not in REVIEW_QUEUE_STATUSES:
+        raise HTTPException(status_code=400, detail="不支持的待复核状态")
+    store = _feedback_store()
+    items, count = store.list_review_queue(status=status, limit=limit, offset=offset)
+    return {"items": items, "count": count, "stats": store.review_queue_stats()}
+
+
+@app.post("/api/review-queue", status_code=201)
+def enqueue_review_queue(request: ReviewQueueCreateRequest) -> dict[str, Any]:
+    item, created = _feedback_store().enqueue_review(_normalise_review_queue(request))
+    return {
+        "ok": True,
+        "created": created,
+        "item": item,
+        "stats": _feedback_store().review_queue_stats(),
+    }
+
+
+@app.patch("/api/review-queue/{queue_id}")
+def update_review_queue(queue_id: str, request: ReviewQueueStatusRequest) -> dict[str, Any]:
+    item = _feedback_store().update_review_queue_status(queue_id, request.status)
+    if item is None:
+        raise HTTPException(status_code=404, detail="待复核记录不存在")
+    return {"ok": True, "item": item, "stats": _feedback_store().review_queue_stats()}
 
 
 @app.get("/api/feedback/export")

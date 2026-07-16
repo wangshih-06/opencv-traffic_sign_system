@@ -23,6 +23,7 @@ import { Card } from "../components/Card";
 import { DetectionEngineControl } from "../components/DetectionEngineControl";
 import { streamUrl } from "../lib/api";
 import { formatPercent } from "../lib/format";
+import { enqueueLowConfidenceReview } from "../lib/reviewQueue";
 import type { Detection, DetectionEngine, SceneQuality, StreamMessage } from "../lib/types";
 import { useAppStore } from "../store/useAppStore";
 
@@ -144,6 +145,7 @@ export function RealtimePage() {
   const [engineWarning, setEngineWarning] = useState<string | null>(null);
   const [deepInferenceMs, setDeepInferenceMs] = useState<number | null>(null);
   const addHistory = useAppStore((state) => state.addHistory);
+  const reviewConfidenceThreshold = useAppStore((state) => state.reviewConfidenceThreshold);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const socketRef = useRef<WebSocket | null>(null);
@@ -289,7 +291,7 @@ export function RealtimePage() {
                 const trackId = item.track_id!;
                 const lastSeen = historyRef.current.get(trackId) ?? 0;
                 if (now - lastSeen < 5000) return;
-                addHistory({
+                const entry = addHistory({
                   source,
                   filename: source === "camera" ? "浏览器摄像头" : videoFile?.name ?? "本地视频",
                   model: selectedModel,
@@ -298,6 +300,7 @@ export function RealtimePage() {
                   confidence: item.confidence,
                   duration_ms: (data.predict_ms ?? 0) + (data.tracker_ms ?? 0),
                 });
+                enqueueLowConfidenceReview(entry, reviewConfidenceThreshold);
                 historyRef.current.set(trackId, now);
               });
           }

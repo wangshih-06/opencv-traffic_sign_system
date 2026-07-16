@@ -74,6 +74,37 @@ class FeedbackStoreTests(unittest.TestCase):
         self.assertEqual(rows[0]["filename"], "'=cmd|calc")
         self.assertEqual(rows[0]["note"], "'+unsafe")
 
+    def test_low_confidence_review_queue_is_idempotent_and_resolvable(self) -> None:
+        queued, created = self.store.enqueue_review({
+            "history_id": "history-low-1",
+            "source": "image",
+            "filename": "uncertain.png",
+            "model": "svm.joblib",
+            "predicted_class_id": 13,
+            "predicted_class_name": "让行",
+            "predicted_confidence": 0.52,
+            "reason": "low_confidence",
+        })
+        duplicate, duplicate_created = self.store.enqueue_review({
+            "history_id": "history-low-1",
+            "source": "image",
+            "filename": "uncertain.png",
+            "predicted_class_id": 13,
+            "predicted_class_name": "让行",
+            "predicted_confidence": 0.52,
+        })
+
+        self.assertTrue(created)
+        self.assertFalse(duplicate_created)
+        self.assertEqual(queued["id"], duplicate["id"])
+        self.assertEqual(self.store.review_queue_stats()["pending"], 1)
+
+        resolved = self.store.resolve_review_queue(queued["id"], "feedback-1")
+        self.assertIsNotNone(resolved)
+        self.assertEqual(resolved["status"], "reviewed")
+        self.assertEqual(resolved["feedback_id"], "feedback-1")
+        self.assertEqual(self.store.review_queue_stats()["reviewed"], 1)
+
 
 class FeedbackValidationTests(unittest.TestCase):
     def test_correct_verdict_uses_predicted_label(self) -> None:

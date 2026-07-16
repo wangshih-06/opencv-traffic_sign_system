@@ -10,6 +10,7 @@ import { DropZone } from "../components/DropZone";
 import { PredictionPanel } from "../components/PredictionPanel";
 import { api } from "../lib/api";
 import { formatDuration, formatPercent, formatTime } from "../lib/format";
+import { enqueueLowConfidenceReview } from "../lib/reviewQueue";
 import { useAppStore } from "../store/useAppStore";
 
 export function ImagePage() {
@@ -23,6 +24,7 @@ export function ImagePage() {
   const setPrediction = useAppStore((state) => state.setPrediction);
   const setDetection = useAppStore((state) => state.setDetection);
   const addHistory = useAppStore((state) => state.addHistory);
+  const reviewConfidenceThreshold = useAppStore((state) => state.reviewConfidenceThreshold);
   const history = useAppStore((state) => state.history);
   const clearHistory = useAppStore((state) => state.clearHistory);
 
@@ -35,7 +37,7 @@ export function ImagePage() {
     onSuccess: (result) => {
       setPrediction(result);
       setDetection(null);
-      addHistory({
+      const entry = addHistory({
         source: "image",
         filename: file?.name ?? "image",
         model: selectedModel,
@@ -44,6 +46,7 @@ export function ImagePage() {
         confidence: result.confidence,
         duration_ms: result.predict_seconds * 1000,
       });
+      enqueueLowConfidenceReview(entry, reviewConfidenceThreshold);
     },
   });
 
@@ -52,15 +55,18 @@ export function ImagePage() {
     onSuccess: (result) => {
       setDetection(result);
       setPrediction(null);
-      result.detections.forEach((item) => addHistory({
-        source: "image",
-        filename: file?.name ?? "image",
-        model: selectedModel,
-        class_id: item.class_id,
-        class_name: item.class_name,
-        confidence: item.confidence,
-        duration_ms: result.detect_seconds * 1000,
-      }));
+      result.detections.forEach((item) => {
+        const entry = addHistory({
+          source: "image",
+          filename: file?.name ?? "image",
+          model: selectedModel,
+          class_id: item.class_id,
+          class_name: item.class_name,
+          confidence: item.confidence,
+          duration_ms: result.detect_seconds * 1000,
+        });
+        enqueueLowConfidenceReview(entry, reviewConfidenceThreshold);
+      });
     },
   });
 

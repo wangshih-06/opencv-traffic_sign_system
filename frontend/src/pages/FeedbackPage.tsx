@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, CircleAlert, Download, Flag, MessageSquareWarning, Send, Trash2 } from "lucide-react";
+import { CheckCircle2, CircleAlert, Download, Flag, ListTodo, MessageSquareWarning, Send, SlidersHorizontal, Trash2 } from "lucide-react";
 import clsx from "clsx";
 import { Button } from "../components/Button";
 import { Card } from "../components/Card";
@@ -8,6 +8,20 @@ import { api } from "../lib/api";
 import { formatPercent, formatTime } from "../lib/format";
 import type { FeedbackStatus, FeedbackVerdict, HistoryItem } from "../lib/types";
 import { useAppStore } from "../store/useAppStore";
+
+type ReviewTarget = {
+  key: string;
+  historyId: string;
+  queueId?: string;
+  source: HistoryItem["source"];
+  filename: string;
+  model?: string | null;
+  class_id: number;
+  class_name: string;
+  confidence: number | null;
+  timestamp: number;
+  automatic: boolean;
+};
 
 const statusLabels: Record<FeedbackStatus, string> = {
   new: "待复核",
@@ -26,7 +40,9 @@ export function FeedbackPage() {
   const queryClient = useQueryClient();
   const history = useAppStore((state) => state.history);
   const selectedModel = useAppStore((state) => state.selectedModel);
-  const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(history[0]?.id ?? null);
+  const reviewConfidenceThreshold = useAppStore((state) => state.reviewConfidenceThreshold);
+  const setReviewConfidenceThreshold = useAppStore((state) => state.setReviewConfidenceThreshold);
+  const [selectedTargetKey, setSelectedTargetKey] = useState<string | null>(null);
   const [verdict, setVerdict] = useState<FeedbackVerdict>("incorrect");
   const [correctedClassId, setCorrectedClassId] = useState("");
   const [note, setNote] = useState("");
@@ -37,28 +53,34 @@ export function FeedbackPage() {
     queryKey: ["feedback"],
     queryFn: () => api.feedback("all"),
   });
+  const reviewQueueQuery = useQuery({
+    queryKey: ["review-queue", "pending"],
+    queryFn: () => api.reviewQueue("pending"),
+  });
   const createMutation = useMutation({
     mutationFn: () => {
-      if (!selectedHistory) throw new Error("请先选择一条识别记录");
-      const correctedId = verdict === "correct" ? selectedHistory.class_id : Number(correctedClassId);
+      if (!selectedTarget) throw new Error("请先选择一条待复核记录");
+      const correctedId = verdict === "correct" ? selectedTarget.class_id : Number(correctedClassId);
       if (verdict === "incorrect" && !Number.isInteger(correctedId)) {
         throw new Error("请选择纠正后的真实类别");
       }
       return api.createFeedback({
-        history_id: selectedHistory.id,
-        source: selectedHistory.source,
-        filename: selectedHistory.filename,
-        model: selectedHistory.model ?? selectedModel,
-        predicted_class_id: selectedHistory.class_id,
-        predicted_class_name: selectedHistory.class_name,
-        predicted_confidence: selectedHistory.confidence,
+        history_id: selectedTarget.historyId,
+        source: selectedTarget.source,
+        filename: selectedTarget.filename,
+        model: selectedTarget.model ?? selectedModel,
+        predicted_class_id: selectedTarget.class_id,
+        predicted_class_name: selectedTarget.class_name,
+        predicted_confidence: selectedTarget.confidence,
         corrected_class_id: correctedId,
         verdict,
         note,
+        review_queue_id: selectedTarget.queueId,
       });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["feedback"] });
+      queryClient.invalidateQueries({ queryKey: ["review-queue"] });
       setNote("");
       setVerdict("incorrect");
     },
@@ -81,18 +103,38 @@ export function FeedbackPage() {
     () => new Set(allFeedback.map((item) => item.history_id).filter(Boolean)),
     [allFeedback],
   );
-  const availableHistory = history.filter((item) => !feedbackIds.has(item.id));
-  const selectedHistory = availableHistory.find((item) => item.id === selectedHistoryId) ?? availableHistory[0] ?? null;
+  const automaticTargets = useMemo<ReviewTarget[]>(() => (reviewQueueQuery.data?.items ?? []).map((item) => ({
+    key: `queue:${item.id}`,
+    historyId: item.history_id,
+    queueId: item.id,
+    source: item.source,
+    filename: item.filename,
+    model: item.model,
+    class_id: item.predicted_class_id,
+    class_name: item.predicted_class_name,
+    confidence: item.predicted_confidence,
+    timestamp: new Date(item.created_at).getTime(),
+    automatic: true,
+  })), [reviewQueueQuery.data]);
+  const queuedHistoryIds = useMemo(() => new Set(automaticTargets.map((item) => item.historyId)), [automaticTargets]);
+  const manualTargets = useMemo<ReviewTarget[]>(() => history
+    .filter((item) => !feedbackIds.has(item.id) && !queuedHistoryIds.has(item.id))
+    .map((item) => ({ ...item, key: `history:${item.id}`, historyId: item.id, automatic: false })), [feedbackIds, history, queuedHistoryIds]);
+  const reviewTargets = useMemo(
+    () => [...automaticTargets, ...manualTargets].sort((a, b) => b.timestamp - a.timestamp),
+    [automaticTargets, manualTargets],
+  );
+  const selectedTarget = reviewTargets.find((item) => item.key === selectedTargetKey) ?? reviewTargets[0] ?? null;
 
   useEffect(() => {
-    if (!selectedHistoryId || !availableHistory.some((item) => item.id === selectedHistoryId)) {
-      setSelectedHistoryId(availableHistory[0]?.id ?? null);
+    if (!selectedTargetKey || !reviewTargets.some((item) => item.key === selectedTargetKey)) {
+      setSelectedTargetKey(reviewTargets[0]?.key ?? null);
     }
-  }, [availableHistory, selectedHistoryId]);
+  }, [reviewTargets, selectedTargetKey]);
 
   useEffect(() => {
-    setCorrectedClassId(selectedHistory ? String(selectedHistory.class_id) : "");
-  }, [selectedHistory?.id, selectedHistory?.class_id]);
+    setCorrectedClassId(selectedTarget ? String(selectedTarget.class_id) : "");
+  }, [selectedTarget?.key, selectedTarget?.class_id]);
 
   const mutationError = [createMutation.error, statusMutation.error, deleteMutation.error]
     .find((error): error is Error => error instanceof Error)?.message;
@@ -107,36 +149,37 @@ export function FeedbackPage() {
         <div>
           <span className="eyebrow">HUMAN-IN-THE-LOOP</span>
           <h2>错例纠正与反馈闭环</h2>
-          <p>把低置信度或识别错误的结果交给人工确认，沉淀为可复核、可导出的纠正样本。</p>
+          <p>低于设定阈值的识别结果会自动进入队列；人工确认后可导出为训练纠正样本。</p>
         </div>
-        <Button variant="secondary" icon={<Download size={16} />} onClick={handleExport}>
-          导出已复核样本
-        </Button>
+        <div className="feedback-hero__actions">
+          <label className="review-threshold"><SlidersHorizontal size={15} /><span>自动入队阈值</span><select value={reviewConfidenceThreshold} onChange={(event) => setReviewConfidenceThreshold(Number(event.target.value))}><option value={0.6}>60%</option><option value={0.7}>70%</option><option value={0.8}>80%</option><option value={0.9}>90%</option></select></label>
+          <Button variant="secondary" icon={<Download size={16} />} onClick={handleExport}>导出已复核样本</Button>
+        </div>
       </div>
 
       <div className="feedback-kpis">
         <div className="feedback-kpi"><span><MessageSquareWarning size={19} /></span><div><small>反馈总数</small><strong>{feedbackQuery.data?.stats.total ?? 0}</strong></div></div>
         <div className="feedback-kpi feedback-kpi--danger"><span><CircleAlert size={19} /></span><div><small>错例数量</small><strong>{feedbackQuery.data?.stats.incorrect ?? 0}</strong></div></div>
-        <div className="feedback-kpi feedback-kpi--warning"><span><Flag size={19} /></span><div><small>待复核</small><strong>{feedbackQuery.data?.stats.new ?? 0}</strong></div></div>
+        <div className="feedback-kpi feedback-kpi--warning"><span><ListTodo size={19} /></span><div><small>自动待复核</small><strong>{reviewQueueQuery.data?.stats.pending ?? 0}</strong></div></div>
         <div className="feedback-kpi feedback-kpi--success"><span><CheckCircle2 size={19} /></span><div><small>已形成闭环</small><strong>{feedbackQuery.data?.stats.exported ?? 0}</strong></div></div>
       </div>
 
       <div className="feedback-grid">
         <div className="feedback-main">
-          <Card eyebrow="CORRECTION QUEUE" title="选择一条识别记录">
-            {availableHistory.length ? (
+          <Card eyebrow="CORRECTION QUEUE" title="待人工复核（低置信度优先）">
+            {reviewTargets.length ? (
               <div className="feedback-history-list">
-                {availableHistory.slice(0, 30).map((item) => (
+                {reviewTargets.slice(0, 30).map((item) => (
                   <button
-                    key={item.id}
-                    className={clsx("feedback-history-item", selectedHistory?.id === item.id && "feedback-history-item--selected")}
+                    key={item.key}
+                    className={clsx("feedback-history-item", selectedTarget?.key === item.key && "feedback-history-item--selected", item.automatic && "feedback-history-item--automatic")}
                     onClick={() => {
-                      setSelectedHistoryId(item.id);
+                      setSelectedTargetKey(item.key);
                       setCorrectedClassId(String(item.class_id));
                     }}
                   >
-                    <span className="feedback-history-item__icon"><Flag size={15} /></span>
-                    <span className="feedback-history-item__copy"><strong>{item.class_name}</strong><small>{item.filename} · {sourceLabels[item.source]} · {formatTime(item.timestamp)}</small></span>
+                    <span className="feedback-history-item__icon">{item.automatic ? <ListTodo size={15} /> : <Flag size={15} />}</span>
+                    <span className="feedback-history-item__copy"><strong>{item.class_name}</strong><small>{item.filename} · {sourceLabels[item.source]} · {formatTime(item.timestamp)}{item.automatic ? " · 自动入队" : ""}</small></span>
                     <b>{formatPercent(item.confidence)}</b>
                   </button>
                 ))}
@@ -147,12 +190,12 @@ export function FeedbackPage() {
           </Card>
 
           <Card eyebrow="HUMAN REVIEW" title="提交人工判断">
-            {selectedHistory ? (
+            {selectedTarget ? (
               <div className="feedback-form">
                 <div className="feedback-original">
                   <span>模型原始判断</span>
-                  <strong>{selectedHistory.class_name}</strong>
-                  <small>类别 #{selectedHistory.class_id} · 置信度 {formatPercent(selectedHistory.confidence)}</small>
+                  <strong>{selectedTarget.class_name}</strong>
+                  <small>类别 #{selectedTarget.class_id} · 置信度 {formatPercent(selectedTarget.confidence)}{selectedTarget.automatic ? " · 已由低置信度规则自动入队" : ""}</small>
                 </div>
                 <div className="feedback-verdict" role="radiogroup" aria-label="判断识别是否正确">
                   <button className={clsx(verdict === "correct" && "active", "feedback-verdict--correct")} onClick={() => setVerdict("correct")}><CheckCircle2 size={17} />识别正确</button>

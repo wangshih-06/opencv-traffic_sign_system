@@ -12,6 +12,9 @@ import type {
   LabelItem,
   ModelsResponse,
   Prediction,
+  ReviewQueueCreate,
+  ReviewQueueItem,
+  ReviewQueueResponse,
 } from "./types";
 
 async function apiFetch<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
@@ -94,6 +97,22 @@ export const api = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
+    }),
+  reviewQueue: (status?: "pending" | "reviewed" | "dismissed") => {
+    const query = status ? `?status=${status}` : "";
+    return apiFetch<ReviewQueueResponse>(`/api/review-queue${query}`);
+  },
+  enqueueReview: (payload: ReviewQueueCreate) =>
+    apiFetch<{ ok: boolean; created: boolean; item: ReviewQueueItem }>("/api/review-queue", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+  updateReviewQueue: (id: string, status: "dismissed") =>
+    apiFetch<{ ok: boolean; item: ReviewQueueItem }>(`/api/review-queue/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status }),
     }),
   updateFeedbackStatus: (id: string, status: FeedbackStatus) =>
     apiFetch<{ ok: boolean; item: FeedbackRecord; stats: FeedbackStats }>(`/api/feedback/${id}`, {

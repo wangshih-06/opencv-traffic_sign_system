@@ -6,6 +6,7 @@ import { Card } from "../components/Card";
 import { DropZone } from "../components/DropZone";
 import { api } from "../lib/api";
 import { formatDuration, formatPercent } from "../lib/format";
+import { enqueueLowConfidenceReview } from "../lib/reviewQueue";
 import type { BatchResponse } from "../lib/types";
 import { useAppStore } from "../store/useAppStore";
 
@@ -14,20 +15,24 @@ export function BatchPage() {
   const [result, setResult] = useState<BatchResponse | null>(null);
   const selectedModel = useAppStore((state) => state.selectedModel);
   const addHistory = useAppStore((state) => state.addHistory);
+  const reviewConfidenceThreshold = useAppStore((state) => state.reviewConfidenceThreshold);
 
   const mutation = useMutation({
     mutationFn: () => api.batch(files, selectedModel),
     onSuccess: (response) => {
       setResult(response);
-      response.items.filter((item) => item.ok).forEach((item) => addHistory({
-        source: "batch",
-        filename: item.filename,
-        model: item.model ?? selectedModel,
-        class_id: item.class_id,
-        class_name: item.class_name,
-        confidence: item.confidence,
-        duration_ms: item.predict_seconds * 1000,
-      }));
+      response.items.filter((item) => item.ok).forEach((item) => {
+        const entry = addHistory({
+          source: "batch",
+          filename: item.filename,
+          model: item.model ?? selectedModel,
+          class_id: item.class_id,
+          class_name: item.class_name,
+          confidence: item.confidence,
+          duration_ms: item.predict_seconds * 1000,
+        });
+        enqueueLowConfidenceReview(entry, reviewConfidenceThreshold);
+      });
     },
   });
 

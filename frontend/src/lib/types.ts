@@ -187,6 +187,7 @@ export interface FeedbackCreate {
   verdict: FeedbackVerdict;
   note?: string;
   bbox?: [number, number, number, number];
+  review_queue_id?: string | null;
 }
 
 export interface FeedbackRecord {
@@ -221,6 +222,42 @@ export interface FeedbackListResponse {
   items: FeedbackRecord[];
   count: number;
   stats: FeedbackStats;
+}
+
+export type ReviewQueueStatus = "pending" | "reviewed" | "dismissed";
+
+export interface ReviewQueueCreate {
+  history_id: string;
+  source: HistoryItem["source"];
+  filename: string;
+  model?: string | null;
+  predicted_class_id: number;
+  predicted_class_name: string;
+  predicted_confidence: number | null;
+  bbox?: [number, number, number, number] | null;
+  reason?: "low_confidence";
+}
+
+export interface ReviewQueueItem extends ReviewQueueCreate {
+  id: string;
+  created_at: string;
+  updated_at: string;
+  status: ReviewQueueStatus;
+  feedback_id: string | null;
+  reason: "low_confidence";
+}
+
+export interface ReviewQueueStats {
+  total: number;
+  pending: number;
+  reviewed: number;
+  dismissed: number;
+}
+
+export interface ReviewQueueResponse {
+  items: ReviewQueueItem[];
+  count: number;
+  stats: ReviewQueueStats;
 }
 
 export interface SceneQuality {
